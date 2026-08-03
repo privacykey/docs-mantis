@@ -14,7 +14,7 @@ Pick the row that matches how each component was installed. After bumping the se
 | **Server** | Docker (`docker compose up -d`) | `git pull && docker compose up -d --build` — `AUTO_MIGRATE=1` (set in `docker-compose.yml`) runs new migrations on container start. |
 | **Server** | Local dev (`pnpm run dev`) | `git pull && corepack enable && pnpm install && pnpm run db:migrate` — then restart `pnpm run dev`. |
 | **Server** | Railway / Render (Git-tracked) | `git push` to the tracked branch — both auto-redeploy. Migrations run on boot via `AUTO_MIGRATE=1`. |
-| **Server** | Fly.io | `git pull && fly deploy`. |
+| **Server** | Fly.io launcher | `git pull && bash deploy/fly-launch.sh --app <name> --region <region>` — safely reuses the app/database and does not rotate the API-key pepper. If `fly.toml` is already configured, `git pull && fly deploy --app <name> --config fly.toml` is the shorter equivalent. |
 | **CLI** | Homebrew (`brew install privacykey/tap/mantis`) | `brew update && brew upgrade mantis`. |
 | **CLI** | Direct tarball from [releases](https://github.com/privacykey/mantis/releases?q=cli-v) | Download the new `mantis-<platform>.tar.gz`, extract, replace the binary on your `$PATH`. |
 | **Edge worker** | `mantis-edge/` via wrangler | `git pull && corepack enable && pnpm install && pnpm --filter @mantis/edge run deploy` — secrets (`MANTIS_EDGE_KEY`, `MANTIS_EDGE_WEBHOOK_ALLOWLIST`) persist across deploys, no re-keying needed. |

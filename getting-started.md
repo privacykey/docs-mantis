@@ -19,7 +19,7 @@ The CLI talks to either of two backends, with the same command surface:
 
 | Backend | What it gives you | Where it runs |
 |---|---|---|
-| **Stateful server** (`mantis`) | Dashboard, hit history, audit log, multiple destinations per key, key revocation, monitor/status, optional Apple Wallet passes | Your own server. Docker Compose on a VPS, or one-click via [Railway / Fly.io / Render](/deployment). **Don't run this on your laptop as your primary backend** — your laptop's not on the public internet at 3am when the canary fires. |
+| **Stateful server** (`mantis`) | Dashboard, hit history, audit log, multiple destinations per key, key revocation, monitor/status, optional Apple Wallet passes | Your own server. Docker Compose on a VPS, the [one-command Fly.io launcher](/deployment/fly), or the [Railway / Render guides](/deployment). **Don't run this on your laptop as your primary backend** — your laptop's not on the public internet at 3am when the canary fires. |
 | **Cloudflare Worker** (`mantis-edge`) | Sub-50ms response from the CF edge, no DB to host, "anyone with the AES key can mint", URLs are self-contained encrypted blobs | Cloudflare's edge — you deploy a single Worker via `pnpm --filter @mantis/edge run deploy` from the source checkout (see [`mantis-edge/`](https://github.com/privacykey/mantis/tree/main/mantis-edge)) |
 
 You can use **both**. Most people deploy the stateful server for primary tripwires (the ones you want a timeline + multi-destination management for), and reach for the edge variant for hand-off URLs that just need to fire a webhook without a central log.

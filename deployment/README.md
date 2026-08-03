@@ -11,7 +11,7 @@ The mantis needs a public-reachable URL. Pick the option that matches where you 
 | **B. [Docker + Tailscale](./tailscale.md)** | Your machine | Tailscale Funnel (`*.ts.net`) | Personal mantis on a laptop / home server — works behind CGNAT |
 | **C. [Docker + Cloudflare Tunnel](./cloudflare.md)** | Your machine | Your own domain on Cloudflare | You already have a Cloudflare-hosted domain; want SSO via Cloudflare Access |
 | **E1. [Railway](./railway.md)** | Railway (long-running) | `*.up.railway.app` or custom | Set-and-forget; the worker runs natively (no cron config) |
-| **E2. [Fly.io](./fly.md)** | Fly (long-running) | `*.fly.dev` or custom | Same shape as Railway; broader regional choice |
+| **E2. [Fly.io](./fly.md)** | Fly app + managed or external Postgres | `*.fly.dev` or custom | One-command, idempotent launch; broader regional choice |
 | **E3. [Render](./render.md)** | Render (long-running) | `*.onrender.com` or custom | Same shape; free tier exists but cold-starts after 15 min idle |
 
 For any of the public options, also see **[edge-limits.md](./edge-limits.md)** for rate-limit and DDoS guidance, and **[backups.md](./backups.md)** for Postgres backup strategies.
