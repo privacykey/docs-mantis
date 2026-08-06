@@ -54,7 +54,8 @@
           "configuration",
           "cli",
           "cli-backup",
-          "updating"
+          "updating",
+          "changelog"
         ]
       },
       {

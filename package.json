@@ -4,6 +4,8 @@
   "scripts": {
     "dev": "npx --yes mint@latest dev",
     "validate": "npx --yes mint@latest validate",
-    "check-links": "npx --yes mint@latest broken-links"
+    "check-links": "npx --yes mint@latest broken-links",
+    "check": "node scripts/check-docs.mjs",
+    "sync-changelog": "node scripts/sync-changelog.mjs"
   }
 }
