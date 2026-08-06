@@ -48,8 +48,10 @@ jobs:
 
       # External links only (--scheme): internal links, anchors and nav are already
       # covered by `npm run check` above, and Mintlify-style extensionless paths like
-      # /updating are not resolvable as files. The sibling repos pass `--base .`, which
-      # current lychee releases reject (base must be a URL or absolute path).
+      # /updating are not resolvable as files. --root-dir keeps lychee from erroring
+      # while resolving root-relative links before the scheme filter excludes them.
+      # The sibling repos pass `--base .`, which current lychee releases reject
+      # (base must be a URL or absolute path).
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
         with:
@@ -59,6 +61,7 @@ jobs:
             --no-progress
             --scheme https
             --scheme http
+            --root-dir ${{ github.workspace }}
             --exclude-path images
             --exclude-path .github
             --accept 200,206,429
