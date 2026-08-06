@@ -50,7 +50,7 @@ jobs:
       # covered by `npm run check` above, and Mintlify-style extensionless paths like
       # /updating are not resolvable as files. --root-dir keeps lychee from erroring
       # while resolving root-relative links before the scheme filter excludes them.
-      # The sibling repos pass `--base .`, which current lychee releases reject
+      # Do not pass `--base .`: current lychee releases reject it
       # (base must be a URL or absolute path).
       - name: Check external links
         uses: lycheeverse/lychee-action@v2

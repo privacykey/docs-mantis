@@ -3,7 +3,7 @@
 /**
  * Regenerate changelog.mdx from the product repo's GitHub Releases.
  *
- * Mantis has no releases.json — its release manifest IS GitHub Releases on
+ * The release manifest is GitHub Releases on
  * privacykey/mantis, the same feed /updating tells operators to watch: `cli-v*` tags
  * publish CLI binaries and plain `v*` tags publish server releases. The tag prefix
  * becomes a component label, the published date becomes the entry's date line, and the
