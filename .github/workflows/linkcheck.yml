@@ -46,6 +46,10 @@ jobs:
           key: cache-lychee-${{ github.sha }}
           restore-keys: cache-lychee-
 
+      # External links only (--scheme): internal links, anchors and nav are already
+      # covered by `npm run check` above, and Mintlify-style extensionless paths like
+      # /updating are not resolvable as files. The sibling repos pass `--base .`, which
+      # current lychee releases reject (base must be a URL or absolute path).
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
         with:
@@ -53,7 +57,8 @@ jobs:
             --cache
             --max-cache-age 1d
             --no-progress
-            --base .
+            --scheme https
+            --scheme http
             --exclude-path images
             --exclude-path .github
             --accept 200,206,429
