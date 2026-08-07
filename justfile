@@ -1,0 +1,14 @@
+# List available commands
+default:
+    @just --list
+
+# Validate the Mintlify build and check for broken links (as CI does)
+[group("dev")]
+lint:
+    npm run validate
+    npm run check-links
+
+# Serve the docs locally with Mintlify
+[group("dev")]
+run:
+    npm run dev
