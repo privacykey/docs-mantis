@@ -1,0 +1,79 @@
+name: Link check
+
+on:
+  pull_request:
+    paths:
+      - "**/*.mdx"
+      - "**/*.md"
+      - "docs.json"
+      - "package.json"
+      - "scripts/**"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.mdx"
+      - "**/*.md"
+      - "docs.json"
+      - "package.json"
+      - "scripts/**"
+  schedule:
+    # Weekly, Monday 06:00 UTC — catches external-link rot between PRs.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check navigation, internal links, anchors, assets and frontmatter
+        run: npm run check
+
+      - name: Restore lychee cache
+        uses: actions/cache@v4
+        with:
+          path: .lycheecache
+          key: cache-lychee-${{ github.sha }}
+          restore-keys: cache-lychee-
+
+      # External links only (--scheme): internal links, anchors and nav are already
+      # covered by `npm run check` above, and Mintlify-style extensionless paths like
+      # /updating are not resolvable as files. --root-dir keeps lychee from erroring
+      # while resolving root-relative links before the scheme filter excludes them.
+      # Do not pass `--base .`: current lychee releases reject it
+      # (base must be a URL or absolute path).
+      - name: Check external links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --cache
+            --max-cache-age 1d
+            --no-progress
+            --scheme https
+            --scheme http
+            --root-dir ${{ github.workspace }}
+            --exclude-path images
+            --exclude-path .github
+            --accept 200,206,429
+            './**/*.mdx'
+            './**/*.md'
+          fail: true
+          jobSummary: true
+
+      - name: Open an issue when the scheduled run finds breakage
+        if: failure() && github.event_name == 'schedule'
+        uses: peter-evans/create-issue-from-file@v5
+        with:
+          title: Broken links found by scheduled link check
+          content-filepath: ./lychee/out.md
+          labels: docs, broken-links

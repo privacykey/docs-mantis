@@ -1,0 +1,52 @@
+name: Sync changelog
+
+on:
+  schedule:
+    # Daily at 12:00 UTC.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Baseline check
+        run: npm run check
+
+      - name: Regenerate changelog.mdx from GitHub Releases
+        run: npm run sync-changelog
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Re-check after regeneration
+        run: npm run check
+
+      - name: Open a PR if the changelog moved
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/sync-changelog
+          delete-branch: true
+          title: "docs: sync changelog from GitHub Releases"
+          labels: docs, automation
+          commit-message: "docs: sync changelog from GitHub Releases"
+          body: |
+            Regenerated `changelog.mdx` from the product repo's GitHub Releases.
+
+            Reviewer checklist:
+
+            - [ ] Every new entry's summary reads as user-facing prose, not a commit subject.
+            - [ ] Component labels are right — `cli-v*` tags render as CLI, plain `v*` tags as Server.
+            - [ ] Each "Full release notes" link resolves to the right GitHub release.
