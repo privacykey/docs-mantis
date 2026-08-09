@@ -39,6 +39,16 @@ program, so they work the same everywhere.
 | `-v, --version` | Print the CLI version |
 | `-h, --help` | Show help for any command |
 
+### Environment-only settings
+
+Three settings have no flag — they only exist as environment variables.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MANTIS_ASCII` | (unset) | Set to any value to force plain-ASCII output. The CLI defaults to Unicode glyphs (`…` `·` `←` `🔐`) and already falls back to ASCII on `TERM=dumb` or a non-UTF-8 locale; this is the explicit opt-out for terminals that render them as mojibake anyway. |
+| `MANTIS_QUIET` | (unset) | Set to `1` to suppress the one-time keychain notice on stderr. Distinct from `-q, --quiet`, which suppresses human-readable **stdout** — this only silences that advisory. |
+| `MANTIS_BULK_CREATE_MAX_BYTES` | `67108864` (64 MiB) | Input-size cap for `mantis bulk-create`, guarding against a pathological CSV (a 10 GB file, or an unclosed quoted field) exhausting memory. Values below 1024, or anything non-integer, are ignored and the default applies. |
+
 ### How a command picks its server
 
 Resolution happens when the command runs, in this order:
@@ -214,6 +224,10 @@ Bulk-create keys from a CSV and write an output CSV with the generated URLs.
 | `--concurrency <n>` | Parallel create requests, `1`–`20` (default `4`) |
 | `--fail-fast` | Stop after the first row-level failure |
 | `--dry-run` | Validate rows and write the output CSV without creating keys |
+
+The input CSV is capped at **64 MiB**. Raise it with
+[`MANTIS_BULK_CREATE_MAX_BYTES`](#environment-only-settings) if you trust the
+file.
 
 ### `mantis list` (alias `ls`)
 
