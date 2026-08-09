@@ -34,21 +34,24 @@ are called out explicitly below.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/keys` | Create a key. Bearer auth. Body: `{ memo, response_kind?, response_payload?, destinations?, expires_at?, dedupe_window_seconds?, monitor_mode?, monitor_window_seconds? }` |
+| `POST` | `/api/keys` | Create a key. Bearer auth. Body: `{ memo, external_id?, response_kind?, response_payload?, destinations?, expires_at?, dedupe_window_seconds?, monitor_mode?, monitor_window_seconds? }`. Supply `external_id` to make creation idempotent — see [below](#idempotent-creation). The one route enrollment-scoped keys may call. |
 | `GET` | `/api/keys?limit=&cursor=` | List accessible keys. Bearer auth. Admin keys see all; non-admin keys see rows they created. |
 | `GET` | `/api/keys/:id` | Get one accessible key. Bearer auth. |
 | `PATCH` | `/api/keys/:id` | Update memo, response, expiry, dedupe, monitor mode/window, `disabled`, or replace destinations. Bearer auth. |
 | `DELETE` | `/api/keys/:id` | Hard-delete a key and cascading hits/notifications. Bearer auth. |
 | `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. |
 | `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer auth. |
-| `GET` | `/api/keys/:id/download?format=<format>` | Download a generated artifact. Bearer or session auth. Formats: `docx`, `xlsx`, `pptx`, `pdf`, `folder`, `nfc-label`, `apple-wallet`, `svg`, `html`, `md`, `eml`, `ics`, `vcf`. |
+| `GET` | `/api/keys/:id/download?format=<format>` | Download a generated artifact. Bearer or session auth. Formats: `docx`, `xlsx`, `pptx`, `pdf`, `folder`, `nfc-label`, `apple-wallet`, `svg`, `html`, `md`, `eml`, `ics`, `vcf`, `rtf`, `cookies`, `bookmarks`, `env`, `aws-credentials`, `netrc`, `kubeconfig`, `ovpn`, `rdp`. See [file keys](/file-keys). |
+| `POST` | `/api/keys/bulk-download` | Zip one generated artifact per key. Bearer or session auth. Body: `{ ids, format }`, max 50 ids; returns a `.zip` with one artifact (or per-key folder) per key. Ids not visible to the caller are silently skipped, not rejected. |
+| `POST` | `/api/keys/device-bundle` | Package an already-minted device suite into an installable zip. Bearer or session auth. Body: `{ device, os, vectors }`, max 20 vectors; returns the install zip, or a JSON file map with `?format=json`. Backs the dashboard's device page and `mantis device new --bundle`. |
 | `GET` | `/api/keys/:id/install?type=<type>[&hostname=example.com][&format=json]` | Generated installer snippet for host, web, NFC, and IoT events. Bearer or session auth. |
 | `POST` | `/api/keys/:id/reset` | Reset a key's latched monitor state. Bearer or session auth. |
 | `POST` | `/api/keys/:id/destinations/:destinationId/signing-secret` | Reveal a webhook destination's plaintext HMAC signing secret. Bearer or session auth. Audited. |
 | `POST` | `/api/keys/:id/destinations/:destinationId/rotate-secret` | Rotate a webhook destination's HMAC signing secret and return the new secret once. Bearer or session auth. Audited. |
-| `GET` | `/api/api-keys` | List API keys. Bearer auth. Hashes are never returned; non-admin keys see only themselves. |
-| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth. Body: `{ name, is_admin? }`; plaintext key returned once. Only admins can mint admin keys. |
+| `GET` | `/api/api-keys` | List API keys. Bearer auth. Hashes are never returned; non-admin keys see only themselves. Each row includes its `scope`. |
+| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth. Body: `{ name, is_admin?, scope? }`; plaintext key returned once. Only admins can mint admin keys. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). |
 | `DELETE` | `/api/api-keys/:id` | Revoke an API key. Bearer auth. Self-revoke is allowed; revoking others requires admin. |
+| `GET` | `/api/device-profiles` | The device-profile / vector catalog used by `mantis device`. Bearer or session auth. |
 | `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. |
 | `GET` `HEAD` | `/api/health` | **Public unless gated by your proxy.** Liveness + `SELECT 1` readiness. 200 = app and DB ok, 503 = DB failure. |
 | `GET` `POST` | `/api/cron/notifications?max=<n>` | Notification retry and retention worker endpoint for serverless deployments. Requires `Authorization: Bearer $CRON_SECRET`; returns 401 if `CRON_SECRET` is unset. |
@@ -76,6 +79,38 @@ Webhook destinations get an HMAC secret. Outbound raw-webhook deliveries include
 `X-Mantis-Timestamp` and `X-Mantis-Signature: sha256=<hex>` over
 `<timestamp>.<json body>`. The plaintext secret is only shown on create, replace,
 explicit reveal, or rotate responses; normal listing returns a fingerprint.
+
+## API key scope: full vs enroll
+
+Every API key carries a `scope`, orthogonal to `is_admin`:
+
+- **`full`** (default) — behaves as described throughout this page. Subject to the admin / non-admin visibility rules.
+- **`enroll`** — create-only. An enroll key may call **only** `POST /api/keys`. Every other management route (list/read/update/delete keys — including the ones it created — plus `/api/hits/recent`, `/api/api-keys`, the audit log, and any session-reachable route) returns `403 forbidden`, and an enroll key cannot log in to the dashboard. `is_admin: true` together with `scope: "enroll"` is rejected at validation.
+
+Enroll keys are the intended credential for MDM / fleet provisioning: you embed one on every managed machine and accept that a curious user will extract it. An extracted enroll key cannot read hit history, alert routing or signing secrets, and cannot enumerate or list keys — but it is not inert, so size the blast radius before you embed one:
+
+- **It can confirm and retrieve any key whose `external_id` it guesses.** A `POST /api/keys` that collides with an existing `external_id` returns that key's trigger URL, memo, `public_id` and expiry (`"reused": true`, HTTP `200`) — see [Idempotent creation](#idempotent-creation) — regardless of which API key created it. `mantis device` derives `external_id`s deterministically as `mantis:device:<os>:<normalized-name>:<slug>`, so an attacker who knows your naming convention can guess a machine's ids and read back that machine's canary URLs, which is exactly what lets an intruder route around the tripwires. Each such claim is recorded in the audit log as `key.claimed`.
+- **It can supply `destinations` on creation**, and Mantis fires the activation ping synchronously — so the key can make your instance POST to an attacker-chosen HTTP(S) endpoint (private, loopback and metadata addresses are rejected unless `ALLOW_PRIVATE_WEBHOOKS=1`) or, if `SMTP_URL` is set, send it mail.
+
+See the Kandji recipe in the product repo's `deploy/kandji/`.
+
+## Idempotent creation
+
+`POST /api/keys` also accepts an optional `external_id` (1–128 chars, matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`) stored on a unique column. When supplied, a
+repeat POST with the same `external_id` returns the **existing** key —
+`"reused": true` with HTTP `200` instead of `201` — rather than minting a
+duplicate. The other body fields (`memo`, `destinations`, …) apply only when the
+row is actually created; a later claim never mutates what the key was first
+configured with. Keys created without an `external_id` are unaffected (unique
+constraint treats NULLs as distinct).
+
+This is the mechanism the fleet-enrollment flow relies on — one key per machine
+serial, so re-running enrollment on a reimaged machine reuses its key instead of
+littering the list. Enroll-scoped callers (and callers claiming another creator's
+`external_id`) get a reduced response shape — trigger URL and identity only, no
+alert routing or signing secrets. A claim that races a concurrent delete returns
+`409 conflict`; retry.
 
 ## Response kinds for the trigger endpoint
 

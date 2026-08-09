@@ -108,6 +108,13 @@ mantis bulk-create \
   --memo-template "{{area}} - {{device}}"
 ```
 
+The output CSV is your input with `mantis_id`, `mantis_url`, and four more
+columns appended. The input can also carry per-row `notify`, `response_kind`,
+`response_payload`, and `expires_at` columns so a row can vary from the rest —
+`response_kind`, `response_payload`, and `expires_at` override the matching flag,
+while a row's `notify` destinations are added on top of the `--notify` flags — see
+[`mantis bulk-create`](/cli#mantis-bulk-create-alias-import-csv) for the full column list.
+
 See [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli) for the full command reference and [`COMMAND_MAP.md`](https://github.com/privacykey/mantis/blob/main/cli/COMMAND_MAP.md) for the option matrix.
 
 ## Browse hits in the dashboard (optional)

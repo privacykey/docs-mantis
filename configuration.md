@@ -8,7 +8,8 @@ These are the variables operators usually need to understand.
 
 ## Required
 
-- `DATABASE_URL` — Postgres connection string.
+- `DATABASE_URL` — Postgres connection string. Used directly when you run Mantis **from source** (`pnpm dev`, `pnpm db:migrate`) — point it at your own Postgres. The Docker Compose deploy **ignores** this value and derives its own from `POSTGRES_PASSWORD` (connecting to host `postgres`, not `localhost`), so a `localhost` value kept here for run-from-source does no harm.
+- `POSTGRES_PASSWORD` — password for the Docker Compose Postgres service, and the single source of truth from which Compose builds the app's `DATABASE_URL`. It ships **empty** in `.env.example` and has no insecure default: both Compose services abort on boot if it is unset or empty. Generate it (together with the pepper below) by running `./scripts/setup.sh` — a bare `cp .env.example .env` is not enough to start the stack. Not needed when running from source against your own Postgres.
 - `MANTIS_API_KEY_PEPPER` — server-side secret used as the HMAC key when hashing API keys at rest. Generate with `openssl rand -base64 32`. A leaked database alone is useless to an attacker without this value too. **Do not rotate after the first key is minted** — rotating invalidates every existing API key used by the CLI or API clients. If you must rotate, plan to re-mint and re-distribute every API key on the same maintenance window.
 
   Upgrading from a pre-pepper deployment? Set the pepper once and existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 hashes too, and opportunistically re-hashes each row to the peppered form on next use. After a few weeks of normal traffic the legacy rows drain to zero.
@@ -34,11 +35,23 @@ These are the variables operators usually need to understand.
 - `SMTP_FROM` — email sender, default `Mantis <mantis@localhost>`.
 - `ALLOW_PRIVATE_WEBHOOKS=1` — allow webhook/Slack/Discord/Teams targets that resolve to private, loopback, link-local, or cloud-metadata IPs. Default is blocked as an SSRF guard.
 
+## Global notification destinations
+
+Beyond the per-key destinations managed with `mantis destinations`, an admin can
+set **instance-wide** destinations from the dashboard at `/settings/notifications`.
+Every key's hits fan out to its own destinations *plus* every global one, so you
+can set a Slack or webhook once and have every key you mint — including
+bulk-created ones — alert you without further setup. A destination listed both
+globally and on a key fires once (the key's own row wins, keeping its signing
+secret and activation history). There is no environment variable or CLI
+subcommand for the global set; it lives only in the admin dashboard.
+
 ## Proxy and public-only hosts
 
 - `TRUST_PROXY_HEADERS=1` — trust `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, and `x-forwarded-for` for forensic IP logging. Set only behind a proxy that strips and re-injects those headers. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
 - `TRUSTED_IP_HEADER` — pin client-IP extraction to a single header (matched case-insensitively), e.g. `x-real-ip`. By default Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present; behind a non-Cloudflare proxy (nginx, Caddy, Traefik) that sets only `x-real-ip` and doesn't strip an inbound `cf-connecting-ip`, an attacker could forge `cf-connecting-ip` and have it trusted. Pin this to the one header your proxy authoritatively writes so all others are ignored. Only takes effect when `TRUST_PROXY_HEADERS` is on.
 - `TRUST_PROXY_HOPS` — number of trusted reverse-proxy hops in front of Mantis, default `1` (clamped to 1–16). Only affects `x-forwarded-for` parsing: the client IP is taken this many entries from the right of the chain (your nearest proxy appends the real peer on the right), so a client can't forge it past your proxy. Raise it only if you stack multiple trusted proxies; it has no effect on single-value headers like `cf-connecting-ip` or `x-real-ip`.
+- `FORCE_SECURE_COOKIES` — override the `Secure` flag on the dashboard session cookie. `1` forces it on, `0` forces it off; unset derives it from the request scheme (`X-Forwarded-Proto`, or the RFC 7239 `Forwarded` header's leftmost hop). Set `1` behind a proxy or tunnel that terminates real TLS but sets **neither** scheme header — otherwise the session cookie travels un-`Secure` over genuine HTTPS. Leave it unset for the proxies Mantis documents (Cloudflare, cloudflared, Tailscale, nginx), which all set a scheme header. Don't force it on over plain HTTP: the browser would then never send the cookie back and login would break.
 - `PUBLIC_ONLY_HOSTS` — comma/space-separated hostnames that should expose only public routes: trigger URLs, status URLs, and Wallet callbacks.
 - `DASHBOARD_HOSTS` — hostnames allowed to serve the dashboard and management API. When `PUBLIC_ONLY_HOSTS` is set, unknown hosts fail closed to public-only unless explicitly listed here.
 - `PUBLIC_ONLY_ALLOW_HEALTH=1` — allow `/api/health` on public-only hosts.

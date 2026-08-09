@@ -11,13 +11,15 @@ Run the stack against your laptop with Docker:
 
 ```bash
 git clone <this repo> mantis && cd mantis
-cp .env.example .env
-pepper="$(openssl rand -base64 32)"
-sed -i.bak "s|^MANTIS_API_KEY_PEPPER=.*|MANTIS_API_KEY_PEPPER=$pepper|" .env
-rm .env.bak
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
 docker compose up -d
 docker compose logs mantis | grep "bootstrap API key" -A1
 ```
+
+`./scripts/setup.sh` (also `pnpm setup`) writes `.env` and generates the two
+secrets Compose refuses to start without — `POSTGRES_PASSWORD` (the DB password
+the app's `DATABASE_URL` is derived from) and `MANTIS_API_KEY_PEPPER`. It's
+idempotent, so re-running leaves existing secrets untouched.
 
 The first boot prints a bootstrap API key. Copy it; it won't be shown again.
 
@@ -37,7 +39,7 @@ When you're ready to move from "trying it" to "running it", pick a real deployme
 
 ## Local dev (for contributors)
 
-The source workspace uses `pnpm@11.1.1` and requires Node `>=25.8.0`.
+The source workspace uses `pnpm@11.1.3` and requires Node `>=25.8.0`.
 
 ```bash
 corepack enable
