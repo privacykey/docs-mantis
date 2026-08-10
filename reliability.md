@@ -13,6 +13,8 @@ Public trigger requests are rate-limited per IP (when a trusted client IP exists
 
 ## Notification retry queue
 
+On each hit, notifications are enqueued for that key's own destinations **plus** every instance-wide [global destination](/configuration#global-notification-destinations) (`key_id IS NULL`, configured at `/settings/notifications`). A destination that appears in both sets is sent once, de-duplicated on `(channel, target)` with the key's own row winning so its signing secret and activation history are used — a key with no destinations of its own still alerts if a global one exists.
+
 Notifications are inserted into a `notifications` table on hit. A background worker claims pending rows (`FOR UPDATE SKIP LOCKED` — safe for multiple instances), attempts delivery with a 5s timeout, and on failure schedules the next attempt with exponential backoff. Status (`pending` / `in_flight` / `succeeded` / `failed` / `aborted`) is surfaced in the dashboard, CLI (`mantis hits <id>`), and API (`GET /api/keys/<id>/hits`).
 
 **Worker mode** (default for non-Vercel deployments):

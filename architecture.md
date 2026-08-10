@@ -17,6 +17,7 @@ src/                         # Next.js server: dashboard, API, public triggers
         new/                 # create form
         [id]/                # detail, hits, downloads, installers, destinations
       settings/wallet/       # admin Apple Wallet / PassKit config
+      settings/notifications/ # admin instance-wide (global) notify destinations
     api/
       keys/...               # authenticated key CRUD, hits, downloads, installers
       api-keys/...           # authenticated API-key listing, minting, revocation
@@ -48,8 +49,7 @@ src/                         # Next.js server: dashboard, API, public triggers
     safe-body.ts             # bounded request body readers for JSON/text routes
     public-only-hosts.ts     # split public/dashboard host routing
     retention.ts             # optional row-level cleanup
-  proxy.ts                   # Host/path guard for public-only deployments
-  middleware.ts              # wires proxy.ts host-split gate into the request path
+  proxy.ts                   # Next request-path entrypoint (formerly middleware.ts, renamed in Next 16); host/path guard for public-only deployments
   instrumentation.ts         # boot hook: migrations, bootstrap key, notify worker
 
 cli/                         # @mantis/cli terminal client

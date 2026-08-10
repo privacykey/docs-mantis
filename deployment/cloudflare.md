@@ -48,14 +48,17 @@ Cloudflare Zero Trust is a separate dashboard at `https://one.dash.cloudflare.co
 
 ```bash
 cd mantis
-cp .env.example .env
-# Edit .env:
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+# Then edit .env:
 #   CLOUDFLARE_TUNNEL_TOKEN=eyJh...
 #   PUBLIC_BASE_URL=https://mantis.<your-domain>
-#   MANTIS_API_KEY_PEPPER=<base64-output-from-openssl-rand-base64-32>
 
 docker compose --profile cloudflared up -d
 ```
+
+`./scripts/setup.sh` generates `POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER`,
+which Compose refuses to start without — a plain `cp .env.example .env` leaves
+`POSTGRES_PASSWORD` empty and the stack won't boot.
 
 ## Step 4 — Verify
 
@@ -173,6 +176,7 @@ The CLI sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on eve
    - `/api/keys*`
    - `/api/hits*`
    - `/api/api-keys*`
+   - `/api/device-profiles*`
    - `/api/audit*`
    - `/api/cron*`
 5. **Identity providers** (for Option 1 / browser SSO): tick the methods you configured.

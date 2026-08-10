@@ -1,12 +1,12 @@
 ---
 title: "CLI reference"
-description: "Every mantis CLI command and flag, verified against the v0.1.6 source."
+description: "Every mantis CLI command and flag, verified against the v0.2.0 source."
 sidebarTitle: "CLI"
 ---
 
 The `mantis` CLI is the primary way to work with a Mantis server (and with the
 stateless [edge worker](/edge-deployment)). This page documents **every** command
-and flag in the CLI, transcribed from the v0.1.6 source. For the conceptual
+and flag in the CLI, transcribed from the v0.2.0 source. For the conceptual
 map — diagrams, mental model, common workflows — see `cli/COMMAND_MAP.md` in the
 app repo.
 
@@ -14,7 +14,7 @@ New to the CLI? Run `mantis init` for guided, interactive setup, or `mantis`
 with no arguments for a context-aware welcome screen.
 
 <Note>
-This reference covers CLI **v0.1.6**. Check yours with `mantis --version`, and
+This reference covers CLI **v0.2.0**. Check yours with `mantis --version`, and
 run `mantis doctor` after upgrading the server to confirm compatibility.
 </Note>
 
@@ -167,7 +167,7 @@ shot. `[memo]` is a human-readable label.
 
 | Flag | What it does |
 |---|---|
-| `-N, --notify <spec>` | Destination as `<channel>:<target>`. Channels: `webhook`, `email`, `slack`, `discord`, `teams`. Repeatable. |
+| `-N, --notify <spec>` | Destination as `<channel>:<target>`. Channels: `webhook`, `email`, `slack`, `discord`, `teams`, `home_assistant`. Repeatable. |
 | `-w, --notify-webhook <url>` | Shortcut for `--notify webhook:<url>`. Repeatable. |
 | `-e, --notify-email <email>` | Shortcut for `--notify email:<email>`. Repeatable. |
 | `-r, --response-kind <kind>` | Trigger response shape: `gif`, `empty`, `json`, `redirect`, `html` |
@@ -228,6 +228,27 @@ Bulk-create keys from a CSV and write an output CSV with the generated URLs.
 The input CSV is capped at **64 MiB**. Raise it with
 [`MANTIS_BULK_CREATE_MAX_BYTES`](#environment-only-settings) if you trust the
 file.
+
+**Per-row CSV columns.** The flags above set one value for *every* row. To vary a
+row from the rest, add these columns to the input CSV. `response_kind`,
+`response_payload`, and `expires_at` override the matching flag for that row only;
+the `notify` / `notify_<channel>` columns add their destinations *on top of* the
+`--notify` flags rather than replacing them:
+
+| Column | Effect |
+|---|---|
+| `memo` | The memo. If absent, falls back to an `area` then a `name` column (or use `--memo-column` / `--memo-template`). |
+| `notify` | One or more `<channel>:<target>` destinations for that row (`;`-separated), added on top of the `--notify` defaults. |
+| `notify_<channel>` | A per-channel column — `notify_webhook`, `notify_email`, `notify_slack`, `notify_discord`, `notify_teams`, `notify_home_assistant`; the cell is the target. |
+| `response_kind` | Per-row response shape, as the flag. |
+| `response_payload` | Per-row payload JSON, as the flag. |
+| `expires_at` | Per-row expiry, as the flag. |
+
+**Output columns.** The output CSV is your input with six columns appended
+(reused in place if a same-named column already exists, matched
+case-insensitively): `mantis_memo`, `mantis_id`, `mantis_public_id`,
+`mantis_url`, `mantis_created_at`, and `mantis_error` (populated per row on
+failure, so a partial run tells you exactly which rows didn't create).
 
 ### `mantis list` (alias `ls`)
 
@@ -309,6 +330,20 @@ Download generated bait files for an existing key. Each flag writes one file.
 | `--eml <file>` | `.eml` email message |
 | `--ics <file>` | Calendar event |
 | `--vcf <file>` | Contact card |
+| `--rtf <file>` | `.rtf` document — beacons on open like `.docx`, but plain text |
+| `--cookies <file>` | Netscape `cookies.txt` session jar |
+| `--bookmarks <file>` | Browser `bookmarks.html` export |
+| `--env <file>` | `.env` credentials file |
+| `--aws-credentials <file>` | `~/.aws/credentials` file |
+| `--netrc <file>` | `.netrc` (auto-read by curl/wget/git) |
+| `--kubeconfig <file>` | kubeconfig with a bait API server |
+| `--ovpn <file>` | OpenVPN profile |
+| `--rdp <file>` | Remote Desktop profile |
+
+The last eight are the credential/config-store bait formats: unlike the document
+formats above (`--rtf` included, which beacons on open like `.docx`), they fire
+when the URL inside is **used**, not when the file is opened. Save each under the name the real thing has (`cookies.txt`, `.netrc`,
+`~/.aws/credentials`, …) — see [file keys](/file-keys#credential-and-config-stores).
 
 ### `mantis install <id>`
 
@@ -342,10 +377,45 @@ plugin-provided type). See [Host events](/host-events).
 | `js-clone-detector` | Web | Page runs on an unexpected hostname |
 | `nfc-ndef` | Tag | NFC tag URL is opened |
 | `homeassistant` | Smart home | HA automation calls the generated `rest_command` |
+| `homeassistant-receiver` | Smart home | Ready-to-paste HA automation that listens on a Mantis webhook destination and reacts (drops the activation ping, example actions) |
 | `scrypted` | Smart home | Scrypted Script sees the selected device event |
 
 Plugins can register additional types; `mantis install` validates against the
 union of built-ins plus installed plugins.
+
+---
+
+## Device suites
+
+`mantis device <subcommand>` — mint and install the full set of host alarms for
+one machine in a single step. Where `mantis new --install` templates one alarm,
+a device suite mints **one key per vector** (shell login, sudo, wake, boot,
+network) for a named machine, so a hit tells you *which* alarm fired rather than
+just "something happened on web01". Each key is keyed idempotently by
+device-name + vector, so re-running for a rebuilt machine reuses its keys instead
+of minting a second set.
+
+### `mantis device profiles`
+
+List the vectors each OS profile would mint (and which need extra setup). No flags.
+
+### `mantis device new`
+
+Mint one key per host alarm for a machine.
+
+| Flag | What it does |
+|---|---|
+| `-o, --os <os>` | Target OS: `macos`, `linux`, `windows`, or `auto`. `auto` uses this machine's OS — only safe when you're on the target machine. |
+| `-n, --name <name>` | Machine these alarms are for; appears in every memo. Defaults to this host's name only with `--install`. |
+| `--vectors <list>` | Comma-separated alarm slugs (see `mantis device profiles`); defaults to the profile's recommended set. |
+| `--all` | Every alarm in the profile, including ones needing extra setup (e.g. macOS wake needs `sleepwatcher`). |
+| `--bundle <path>` | Write the install bundle (`.zip` of installers + a bootstrap script) to this path. |
+| `--install` | Apply the alarms to **this** machine now — touches LaunchAgents / systemd units / scheduled tasks, so it confirms first. |
+| `-y, --yes` | Skip the `--install` confirmation. |
+| `--dry-run` | Show what would be minted, and mint nothing. |
+
+`--bundle` is the reversible option — you read the script before running it;
+`--install` is the apply-now shortcut for the machine you're on.
 
 ---
 
@@ -406,12 +476,12 @@ Reset a key's tripped monitor state (latch mode). No flags.
 
 `mantis destinations <subcommand>` (alias `dest`) — incrementally manage
 notification destinations on a key. Channels: `webhook`, `email`, `slack`,
-`discord`, `teams`.
+`discord`, `teams`, `home_assistant`.
 
 | Command | Flags |
 |---|---|
 | `destinations list <key-id>` (alias `ls`) | none |
-| `destinations add <key-id> [channel] [target]` | `--channel <channel>` (`webhook`/`email`/`slack`/`discord`/`teams`), `--target <target>` (URL or email) |
+| `destinations add <key-id> [channel] [target]` | `--channel <channel>` (`webhook`/`email`/`slack`/`discord`/`teams`/`home_assistant`), `--target <target>` (URL or email) |
 | `destinations rm <key-id> <destination-id>` (alias `remove`) | none |
 | `destinations test <key-id>` | `-y, --yes` (skip the confirmation prompt) |
 | `destinations rotate-secret <key-id> <destination-id>` | `-y, --yes` (skip the confirmation prompt) |
@@ -419,6 +489,12 @@ notification destinations on a key. Channels: `webhook`, `email`, `slack`,
 - `add` fires an activation ping when the destination is created.
 - `test` fires a synthetic hit on the key URL and reports which destinations succeeded.
 - `rotate-secret` rotates the HMAC signing secret on a webhook destination; the new secret is shown **once**.
+
+These subcommands manage destinations **on one key**. To route *every* key's
+hits to a shared destination without re-entering it each time, set an
+instance-wide destination in the dashboard at `/settings/notifications` (admin
+only) — see [global destinations](/configuration#global-notification-destinations).
+There is no CLI subcommand for the global set.
 
 ---
 
@@ -443,6 +519,17 @@ Worker) key flow. See [Edge deployment](/edge-deployment).
 ### `mantis edge keygen`
 
 Generate a 32-byte AES key for an edge worker (prints to stdout). No flags.
+
+### `mantis edge deploy`
+
+Deploy the `mantis-edge` Worker (wraps `wrangler deploy`) and capture its URL.
+Runs the worker's own `wrangler` via `npx`, so no global install is needed.
+
+| Flag | What it does |
+|---|---|
+| `--dir <path>` | Worker directory to deploy from (defaults to `./` or `./mantis-edge`) |
+| `--set-key` | After a successful deploy, store the AES key locally for the deployed URL (prompts) |
+| `[wranglerArgs...]` | Extra args forwarded verbatim to `wrangler deploy` — put them after `--` |
 
 ### `mantis edge set-key [worker] [key]`
 
@@ -489,6 +576,28 @@ on a TTY to launch the interactive wizard.
 | `--hostname <host>` | Expected hostname (required for `--install js-clone-detector`) |
 
 `--edge-key` is named separately from the global `--key` to avoid a collision.
+
+### `mantis edge device`
+
+The stateless counterpart to [`mantis device new`](#mantis-device-new): mint one
+edge URL per host alarm for a machine and write an install bundle **directory**,
+with no server and no database. Same vector model as `mantis device`, plus the
+edge minting flags.
+
+| Flag | What it does |
+|---|---|
+| `-o, --os <os>` | Target OS: `macos`, `linux`, `windows`, or `auto` |
+| `-n, --name <name>` | Machine these alarms are for; appears in every memo |
+| `--vectors <list>` | Comma-separated alarm slugs (see `mantis device profiles`); defaults to the recommended set |
+| `--all` | Every alarm in the profile, including ones needing extra setup |
+| `--bundle <dir>` | Write the install bundle to this **directory** (must not already have contents) |
+| `--install` | Apply the alarms to this machine now (asks first) |
+| `-y, --yes` | Skip the `--install` confirmation |
+| `--dry-run` | Show what would be minted, and mint nothing |
+| `--worker <url>` | Worker base URL (`https://…`); falls back to the current profile's edge worker |
+| `--webhook <url>` | Webhook URL the worker POSTs on hit — every minted URL embeds it |
+| `--channel <channel>` | Destination channel formatter: `webhook`, `slack`, `discord`, `teams` |
+| `--edge-key <base64url>` | Override the stored AES key for this mint |
 
 ### `mantis edge install <url>`
 

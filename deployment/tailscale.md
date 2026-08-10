@@ -59,15 +59,19 @@ This is the existing one-host setup. It exposes the whole app publicly through
 Funnel; dashboard and API routes still require mantis auth.
 
 ```bash
-cp .env.example .env
-# Edit .env:
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+# Then edit .env:
 #   TS_AUTHKEY=tskey-auth-xxxxxxxxxxxx
 #   TS_HOSTNAME=mantis
 #   PUBLIC_BASE_URL=https://mantis.<your-tailnet>.ts.net
-#   MANTIS_API_KEY_PEPPER=<base64-output-from-openssl-rand-base64-32>
 
 docker compose --profile tailscale up -d
 ```
+
+`./scripts/setup.sh` generates the two secrets Compose won't start without —
+`POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER` — so you only fill in the
+Tailscale and URL values above. A plain `cp .env.example .env` leaves
+`POSTGRES_PASSWORD` empty and the stack refuses to boot.
 
 Verify:
 
@@ -88,14 +92,15 @@ It starts two Tailscale sidecars:
 - `mantis-public.<tailnet>.ts.net` uses Tailscale Funnel. Mantis allows only
   public routes on this host: `/c/*`, `/status/*`, and `/api/wallet/*`.
 
-Configure `.env`:
+Run `./scripts/setup.sh` first to create `.env` with the two required secrets
+(`POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER`), then add the split-host
+configuration to it:
 
 ```bash
 TS_AUTHKEY=tskey-auth-xxxxxxxxxxxx
 TS_PRIVATE_HOSTNAME=mantis-private
 TS_PUBLIC_HOSTNAME=mantis-public
 TS_EXTRA_ARGS=--advertise-tags=tag:mantis
-MANTIS_API_KEY_PEPPER=<base64-output-from-openssl-rand-base64-32>
 
 # Generated trigger/status/wallet URLs should be public.
 PUBLIC_BASE_URL=https://mantis-public.<your-tailnet>.ts.net

@@ -70,6 +70,10 @@ When the allowlist is set, encrypted URLs with non-matching webhook hosts return
 pnpm exec wrangler deploy
 ```
 
+Or let the CLI wrap it — [`mantis edge deploy`](/cli#mantis-edge-deploy) runs the
+worker's own `wrangler deploy` via `npx`, captures the deployed URL, and with
+`--set-key` stores the AES key for it in one step.
+
 Wrangler prints the deployed Worker URL, usually:
 
 ```text
