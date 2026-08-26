@@ -1,2 +1,6 @@
 .DS_Store
 .DS_Store
+
+# Mintlify export output (built by `just export`)
+export.zip
+dist/

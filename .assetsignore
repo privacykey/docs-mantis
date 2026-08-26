@@ -1,0 +1,18 @@
+# Files that must not be served as part of the docs site.
+#
+# `mint export` copies repo files into the export and adds its own
+# local-serving helpers, so without this they end up published:
+#   serve.js, Start Docs.*  Mintlify's double-click-to-serve helpers
+#   justfile, scripts/      copied out of this repo by the exporter
+#   LICENSE, README.md      repo files, not site content
+#
+# This file is committed at the repo root and copied into dist/ by
+# `just export`, because dist/ is regenerated on every build.
+serve.js
+Start Docs.bat
+Start Docs.command
+justfile
+scripts
+LICENSE
+README.md
+.assetsignore

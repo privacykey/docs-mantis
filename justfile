@@ -18,9 +18,11 @@ run:
 export:
     npx --yes mint@latest export
     rm -rf dist
-    unzip -q export.zip -d dist
+    mkdir -p dist
+    unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist
+    cp .assetsignore dist/.assetsignore
 
 # Deploy the docs site to Cloudflare
 [group("deploy")]
 deploy: export
-    npx --yes wrangler@latest deploy --assets dist --name docs-mantis --compatibility-date 2026-05-01
+    npx --yes wrangler@latest deploy
