@@ -8,6 +8,7 @@ on:
       - "docs.json"
       - "package.json"
       - "scripts/**"
+      - ".github/workflows/linkcheck.yml"
   push:
     branches: [main]
     paths:
@@ -16,16 +17,15 @@ on:
       - "docs.json"
       - "package.json"
       - "scripts/**"
+      - ".github/workflows/linkcheck.yml"
   schedule:
-    # Weekly, Monday 06:00 UTC — catches external-link rot between PRs.
+    # Catch external-link rot weekly even when no docs change.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
-permissions:
-  contents: read
-
 jobs:
   lychee:
+    name: lychee
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check navigation, internal links, anchors, assets and frontmatter
+      - name: Run docs smoke check
         run: npm run check
 
       - name: Restore lychee cache
@@ -46,32 +46,41 @@ jobs:
           key: cache-lychee-${{ github.sha }}
           restore-keys: cache-lychee-
 
-      # External links only (--scheme): internal links, anchors and nav are already
-      # covered by `npm run check` above, and Mintlify-style extensionless paths like
-      # /updating are not resolvable as files. --root-dir keeps lychee from erroring
-      # while resolving root-relative links before the scheme filter excludes them.
-      # Do not pass `--base .`: current lychee releases reject it
-      # (base must be a URL or absolute path).
       # External links only (--scheme): internal links and anchors are covered by
       # `npm run check` above, and extensionless Mintlify paths are not files.
-      # `--base .` is rejected by current lychee (base must be a URL or absolute
+      # `--base .` is rejected by current lychee (base must be a URL or an absolute
       # path); --root-dir resolves root-relative links instead.
-      # dash.cloudflare.com bot-blocks CI with 403 — excluded rather than accepting
-      # 403 globally, which would mask genuinely forbidden links.
-      # localhost/loopback URLs are documentation examples, not live links.
-      # Generous timeout/retries: lychee exits non-zero on a timeout as well as a
-      # broken link, so a slow third-party host would otherwise block every PR.
-      # docs.[a-z]+.privacykey.org: no docs domain has DNS yet; drop this exclusion once they resolve
-      - name: Check external links
+      #
+      # --accept must restate lychee's DEFAULT accept set, because the flag REPLACES
+      # it rather than extending it. Passing a bare `--accept 200,206,429` silently
+      # made 201/202/204/207/226 count as broken links.
+      #
+      # --accept-timeouts is the purpose-built flag for "fail on broken, tolerate
+      # slow": lychee otherwise counts a TIMEOUT as an error and exits non-zero, so
+      # one slow third-party host fails the job while reporting "Errors 0".
+      #
+      # --cache-exclude-status stops a transient 429/5xx being cached as a failure
+      # and replayed for the next 24h, which re-running the job does not clear.
+      #
+      # Excludes, each for a reason that is not link rot:
+      #   loopback/localhost   documentation examples, not live links
+      #   dash.cloudflare.com  bot-blocks CI with 403; excluded rather than accepting
+      #                        403 globally, which would mask real Forbidden results
+      #   docs.*.privacykey.org  no docs domain has DNS yet — DROP THIS once they resolve
+      - name: Run lychee
+        id: lychee
         uses: lycheeverse/lychee-action@v2
         with:
           args: >-
             --cache
             --max-cache-age 1d
+            --cache-exclude-status '429,500..=599'
             --no-progress
             --timeout 30
             --max-retries 5
             --retry-wait-time 3
+            --accept-timeouts
+            --max-concurrency 32
             --scheme https
             --scheme http
             --root-dir ${{ github.workspace }}
@@ -80,17 +89,37 @@ jobs:
             --exclude-loopback
             --exclude 'localhost'
             --exclude 'dash\.cloudflare\.com'
-            --exclude 'docs\.[a-z]+\.privacykey\.org'
-            --accept 200,206,429
+            --exclude 'docs\.([a-z0-9-]+\.)?privacykey\.org'
+            --accept '100..=103,200..=299,429'
             './**/*.mdx'
             './**/*.md'
           fail: true
           jobSummary: true
 
-      - name: Open an issue when the scheduled run finds breakage
+      # Reuse one issue instead of filing a fresh one every failing cron.
+      - name: Find the existing link-check issue
         if: failure() && github.event_name == 'schedule'
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          number=$(gh issue list --state open --limit 50 \
+            --search 'Broken links found by scheduled link check in:title' \
+            --json number --jq '.[0].number // empty')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      # Gated on lychee's own exit code, not on the job failing: a checkout or
+      # `npm run check` failure must not file an issue titled "Broken links found".
+      # An empty exit_code means lychee never ran, so this is skipped.
+      - name: Report broken links found by the scheduled run
+        if: >-
+          failure() && github.event_name == 'schedule'
+          && steps.lychee.outputs.exit_code != ''
+          && steps.lychee.outputs.exit_code != '0'
         uses: peter-evans/create-issue-from-file@v5
         with:
-          title: Broken links found by scheduled link check
+          issue-number: ${{ steps.existing.outputs.number }}
+          title: "Broken links found by scheduled link check"
           content-filepath: ./lychee/out.md
           labels: docs, broken-links
