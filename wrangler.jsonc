@@ -3,12 +3,11 @@
   // script — Cloudflare just serves the exported files. Asset requests are
   // unmetered.
   //
-  // `dist/` is the unpacked `mint export` output and is NOT in git; build it
-  // with `just export` locally, or with this build command in Workers Builds:
-  //
-  //   npx --yes mint@latest export && rm -rf dist && mkdir -p dist \
-  //     && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) \
-  //     && cp .assetsignore dist/.assetsignore
+  // `dist/` is the unpacked `mint export` output and is NOT in git. It is
+  // built by `npm run build`. Workers Builds has NO default build command, so
+  // a connected repo must set its build command to `npm run build` in the
+  // Cloudflare dashboard, or the deploy fails with "directory does not exist".
+  // `just export` and `just deploy` call the same script.
   //
   // The Mintlify export carries no 404.html, so not_found_handling is left at
   // its default rather than pointing at a page that does not exist.

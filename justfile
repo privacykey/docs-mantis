@@ -16,11 +16,7 @@ run:
 # Build the Mintlify static export into dist/
 [group("deploy")]
 export:
-    npx --yes mint@latest export
-    rm -rf dist
-    mkdir -p dist
-    unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist
-    cp .assetsignore dist/.assetsignore
+    npm run build
 
 # Deploy the docs site to Cloudflare
 [group("deploy")]

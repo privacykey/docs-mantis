@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "npx --yes mint@latest dev",
+    "build": "npx --yes mint@latest export && rm -rf dist && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore",
     "validate": "npx --yes mint@latest validate",
     "check-links": "npx --yes mint@latest broken-links",
     "check": "node scripts/check-docs.mjs",
