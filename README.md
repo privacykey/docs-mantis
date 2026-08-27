@@ -2,6 +2,10 @@
 
 The Mintlify documentation source for [`privacykey/mantis`](https://github.com/privacykey/mantis), a self-hostable canary key service.
 
+Production is a Cloudflare Worker serving the static export as assets
+([`wrangler.jsonc`](wrangler.jsonc)). `just deploy` builds and publishes it.
+**Hostname:** `docs.mantis.privacykey.org` *(DNS not configured yet)*
+
 [![Project status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fprivacykey%2F.github%2Fmain%2Fbadges%2Fdocs-mantis.json)](https://github.com/privacykey/.github/blob/main/STATUS.md#docs-mantis)
 
 <!-- disclosure:start -->
@@ -63,11 +67,7 @@ The navigation groups in `docs.json`, and the files behind them:
 4. Link between pages with root-relative, extensionless paths (`/getting-started`, `/deployment/fly`). Relative `./file.md` links belong only in the two `.mintignore`d README files, which are read on GitHub.
 5. Run `npm run check` and `npm run validate`.
 
-## How it deploys
-
-There is no deploy workflow in this repository. Publishing is meant to run through the Mintlify GitHub App: connect `privacykey/docs-mantis` in the Mintlify dashboard, install the app for this repository, and set `/` as the docs source path. Mintlify then builds from `main` after each push. The app is not connected yet, which is why no site is live.
-
-Three workflows do run here:
+## CI
 
 - **Mintlify** (`.github/workflows/mintlify.yml`) validates the build and checks internal links on every pull request and every push to `main`.
 - **Link check** (`.github/workflows/linkcheck.yml`) runs `npm run check` and then lychee over external links, on content changes and weekly on Mondays. A scheduled failure opens an issue.
