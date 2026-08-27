@@ -58,6 +58,7 @@ jobs:
       # path); --root-dir resolves root-relative links instead.
       # dash.cloudflare.com bot-blocks CI with 403 — excluded rather than accepting
       # 403 globally, which would mask genuinely forbidden links.
+      # localhost/loopback URLs are documentation examples, not live links.
       # docs.[a-z]+.privacykey.org: no docs domain has DNS yet; drop this exclusion once they resolve
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
@@ -71,6 +72,8 @@ jobs:
             --root-dir ${{ github.workspace }}
             --exclude-path images
             --exclude-path .github
+            --exclude-loopback
+            --exclude 'localhost'
             --exclude 'dash\.cloudflare\.com'
             --exclude 'docs\.[a-z]+\.privacykey\.org'
             --accept 200,206,429
