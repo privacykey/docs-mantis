@@ -1,0 +1,22 @@
+{
+  // Static-assets-only Worker: no `main` entry point, so there is no Worker
+  // script — Cloudflare just serves the exported files. Asset requests are
+  // unmetered.
+  //
+  // `dist/` is the unpacked `mint export` output and is NOT in git. It is
+  // built by `npm run build`. Workers Builds has NO default build command, so
+  // a connected repo must set its build command to `npm run build` in the
+  // Cloudflare dashboard, or the deploy fails with "directory does not exist".
+  // `just export` and `just deploy` call the same script.
+  //
+  // The Mintlify export carries no 404.html, so not_found_handling is left at
+  // its default rather than pointing at a page that does not exist.
+  "name": "docs-mantis",
+  "compatibility_date": "2026-05-01",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "./dist"
+  }
+}
