@@ -59,6 +59,8 @@ jobs:
       # dash.cloudflare.com bot-blocks CI with 403 — excluded rather than accepting
       # 403 globally, which would mask genuinely forbidden links.
       # localhost/loopback URLs are documentation examples, not live links.
+      # Generous timeout/retries: lychee exits non-zero on a timeout as well as a
+      # broken link, so a slow third-party host would otherwise block every PR.
       # docs.[a-z]+.privacykey.org: no docs domain has DNS yet; drop this exclusion once they resolve
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
@@ -67,6 +69,9 @@ jobs:
             --cache
             --max-cache-age 1d
             --no-progress
+            --timeout 30
+            --max-retries 5
+            --retry-wait-time 3
             --scheme https
             --scheme http
             --root-dir ${{ github.workspace }}
