@@ -11,12 +11,12 @@ src/                         # Next.js server: dashboard, API, public triggers
     login/                   # API-key login form; mints httpOnly sessions
     logout/                  # POST clears the session cookie
     (app)/                   # authenticated dashboard route group
-      layout.tsx             # shared nav: keys, new, admin-only wallet settings
+      layout.tsx             # shared nav: keys, new, bulk, machine, dev inbox, admin-only settings
       keys/
         page.tsx             # key list, enable/disable controls
         new/                 # create form
         [id]/                # detail, hits, downloads, installers, destinations
-      settings/wallet/       # admin Apple Wallet / PassKit config
+      settings/wallet/       # admin Apple Wallet status (read-only; config via APPLE_PASS_* env)
       settings/notifications/ # admin instance-wide (global) notify destinations
     api/
       keys/...               # authenticated key CRUD, hits, downloads, installers

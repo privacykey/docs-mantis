@@ -117,5 +117,7 @@ contact `NOTE` (falling back to that same title when you give none).
 The key memo and title flow into these artifacts (document properties, calendar/contact fields), so Mantis sanitizes them on generation: control bytes illegal in XML 1.0 are stripped from the Office / SVG / HTML formats, and a lone carriage return is normalized in the line-oriented `.ics` / `.vcf` formats — both so a memo carrying stray control characters can't produce a file that silently fails to open or that injects a forged property line.
 
 Apple Wallet artifacts require an Apple Developer Pass Type ID certificate. Set
-the `APPLE_PASS_*` env vars or configure `/settings/wallet` as an admin. If
-Wallet is not configured, `format=apple-wallet` returns `503 not_configured`.
+the `APPLE_PASS_*` env vars on the server (see
+[Configuration](/configuration#apple-wallet)); admins can check the current
+state at `/settings/wallet`. If Wallet is not configured, `format=apple-wallet`
+returns `503 not_configured`.

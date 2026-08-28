@@ -14,7 +14,7 @@ These are the variables operators usually need to understand.
 
   Upgrading from a pre-pepper deployment? Set the pepper once and existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 hashes too, and opportunistically re-hashes each row to the peppered form on next use. After a few weeks of normal traffic the legacy rows drain to zero.
 
-- `MANTIS_SECRET_KEY` *(optional)* — envelope-encryption key for operator secrets stored in the database: per-destination webhook HMAC signing secrets, the Apple Wallet auth secret, and the `.p12` certificate passphrase. When set, those columns are sealed at rest with AES-256-GCM (an `encv1:` envelope) so a database-only leak (backup, read replica) yields no usable secrets — the same trust model as the pepper above. Generate with `openssl rand -base64 32` (a 64-character hex string also works; it must decode to exactly 32 bytes). Leave it unset to keep plaintext-at-rest behavior. The feature is backward compatible: existing plaintext rows are read transparently, and once the key is set, new writes are encrypted while legacy rows migrate to ciphertext the next time a signing secret is rotated or the wallet config is re-saved. Don't rotate this key without re-saving those secrets, and don't remove it once rows are encrypted — reads of sealed values will then fail.
+- `MANTIS_SECRET_KEY` *(optional)* — envelope-encryption key for operator secrets stored in the database: per-destination webhook HMAC signing secrets, the Apple Wallet auth secret, and the `.p12` certificate passphrase. When set, those columns are sealed at rest with AES-256-GCM (an `encv1:` envelope) so a database-only leak (backup, read replica) yields no usable secrets — the same trust model as the pepper above. Generate with `openssl rand -base64 32` (a 64-character hex string also works; it must decode to exactly 32 bytes). Leave it unset to keep plaintext-at-rest behavior. The feature is backward compatible: existing plaintext rows are read transparently, and once the key is set, new writes are encrypted while legacy rows migrate to ciphertext the next time a signing secret is rotated. (A legacy DB wallet config can't be re-saved — wallet config is env-var driven now — so clear it from `/settings/wallet` instead of leaving its plaintext secrets in the database.) Don't rotate this key without re-saving those secrets, and don't remove it once rows are encrypted — reads of sealed values will then fail.
 
 ## URLs
 
@@ -86,8 +86,12 @@ cron mode runs the same sweep through `/api/cron/notifications`.
 
 ## Apple Wallet
 
-Apple Wallet can be configured with env vars or from the admin dashboard at
-`/settings/wallet`. Env vars take precedence over the DB-stored dashboard config.
+Apple Wallet is configured with env vars — mount the certificate and secrets
+with your deploy (e.g. docker secrets), not through the app. The admin page at
+`/settings/wallet` is read-only: it shows whether Wallet is configured and from
+which source. Earlier versions had a dashboard upload form that stored the
+config in the database; a leftover DB config still works (env vars take
+precedence) but can only be cleared from that page, not re-saved.
 
 Required to enable `.pkpass` generation:
 

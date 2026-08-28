@@ -14,7 +14,8 @@ If you only ever mint one API key for your deploy you'll never notice the
 distinction; the schema is shaped that way so it's easy to later promote a
 shared instance to multi-user. Until then, treat every operator as admin and
 keep your bootstrap key safe. Admin privileges are also required for the
-instance-wide audit log and Apple Wallet settings. The `audit log`
+instance-wide audit log and the settings pages (global notify destinations,
+Apple Wallet status). The `audit log`
 (`mantis audit log`, admin-only) records create / update / delete / login /
 destination-secret / wallet-config events across the instance.
 
