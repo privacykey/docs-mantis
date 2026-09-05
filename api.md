@@ -39,8 +39,8 @@ are called out explicitly below.
 | `GET` | `/api/keys/:id` | Get one accessible key. Bearer auth. |
 | `PATCH` | `/api/keys/:id` | Update memo, response, expiry, dedupe, monitor mode/window, `disabled`, or replace destinations. Bearer auth. |
 | `DELETE` | `/api/keys/:id` | Hard-delete a key and cascading hits/notifications. Bearer auth. |
-| `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. |
-| `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer auth. |
+| `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. Each hit carries a `notifications` array; see [notification rows](#notification-rows-in-hit-listings). |
+| `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer or session auth. Same `notifications` shape as above. |
 | `GET` | `/api/keys/:id/download?format=<format>` | Download a generated artifact. Bearer or session auth. Formats: `docx`, `xlsx`, `pptx`, `pdf`, `folder`, `nfc-label`, `apple-wallet`, `svg`, `html`, `md`, `eml`, `ics`, `vcf`, `rtf`, `cookies`, `bookmarks`, `env`, `aws-credentials`, `netrc`, `kubeconfig`, `ovpn`, `rdp`. See [file keys](/file-keys). |
 | `POST` | `/api/keys/bulk-download` | Zip one generated artifact per key. Bearer or session auth. Body: `{ ids, format }`, max 50 ids; returns a `.zip` with one artifact (or per-key folder) per key. Ids not visible to the caller are silently skipped, not rejected. |
 | `POST` | `/api/keys/device-bundle` | Package an already-minted device suite into an installable zip. Bearer or session auth. Body: `{ device, os, vectors }`, max 20 vectors; returns the install zip, or a JSON file map with `?format=json`. Backs the dashboard's device page and `mantis device new --bundle`. |
@@ -49,10 +49,10 @@ are called out explicitly below.
 | `POST` | `/api/keys/:id/destinations/:destinationId/signing-secret` | Reveal a webhook destination's plaintext HMAC signing secret. Bearer or session auth. Audited. |
 | `POST` | `/api/keys/:id/destinations/:destinationId/rotate-secret` | Rotate a webhook destination's HMAC signing secret and return the new secret once. Bearer or session auth. Audited. |
 | `GET` | `/api/api-keys` | List API keys. Bearer auth. Hashes are never returned; non-admin keys see only themselves. Each row includes its `scope`. |
-| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth. Body: `{ name, is_admin?, scope? }`; plaintext key returned once. Only admins can mint admin keys. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). |
+| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth, **admin-only** (`403` for non-admin keys — rows carry no lineage, so a non-admin that could mint siblings would outlive its own revocation). Body: `{ name, is_admin?, scope? }`; plaintext key returned once. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). |
 | `DELETE` | `/api/api-keys/:id` | Revoke an API key. Bearer auth. Self-revoke is allowed; revoking others requires admin. |
 | `GET` | `/api/device-profiles` | The device-profile / vector catalog used by `mantis device`. Bearer or session auth. |
-| `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. |
+| `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. `actor` must be a full UUID (`422` otherwise). |
 | `GET` `HEAD` | `/api/health` | **Public unless gated by your proxy.** Liveness + `SELECT 1` readiness. 200 = app and DB ok, 503 = DB failure. |
 | `GET` `POST` | `/api/cron/notifications?max=<n>` | Notification retry and retention worker endpoint for serverless deployments. Requires `Authorization: Bearer $CRON_SECRET`; returns 401 if `CRON_SECRET` is unset. |
 | `GET` `HEAD` | `/status/:public_id` | **Public.** Uptime-monitor status endpoint. 200 = ok, 503 = tripped, 404 = not monitored / disabled / expired / unknown. Does not record a hit. |
@@ -89,7 +89,7 @@ Every API key carries a `scope`, orthogonal to `is_admin`:
 
 Enroll keys are the intended credential for MDM / fleet provisioning: you embed one on every managed machine and accept that a curious user will extract it. An extracted enroll key cannot read hit history, alert routing or signing secrets, and cannot enumerate or list keys — but it is not inert, so size the blast radius before you embed one:
 
-- **It can confirm and retrieve any key whose `external_id` it guesses.** A `POST /api/keys` that collides with an existing `external_id` returns that key's trigger URL, memo, `public_id` and expiry (`"reused": true`, HTTP `200`) — see [Idempotent creation](#idempotent-creation) — regardless of which API key created it. `mantis device` derives `external_id`s deterministically as `mantis:device:<os>:<normalized-name>:<slug>`, so an attacker who knows your naming convention can guess a machine's ids and read back that machine's canary URLs, which is exactly what lets an intruder route around the tripwires. Each such claim is recorded in the audit log as `key.claimed`.
+- **It can recover the trigger URL of any key whose `external_id` it guesses.** A `POST /api/keys` that collides with an existing `external_id` returns that key's trigger URL, `public_id` and expiry (`"reused": true`, HTTP `200`) even when a different API key created it — the memo is `null` in that case and alert routing is never included; see [Idempotent creation](#idempotent-creation). This is what lets a re-imaged machine, or a rotated enroll key, find its canary again, and it is the one thing an extracted enroll key can do beyond creating keys. `mantis device` derives `external_id`s deterministically as `mantis:device:<os>:<normalized-name>:<slug>`, so an attacker who knows your naming convention can guess a machine's ids and read back that machine's canary URLs, which is exactly what lets an intruder route around the tripwires. Each cross-key claim is recorded in the audit log as `key.claimed` with `cross_key: true` — watch for a burst of them. (A full-scope key that did not create the key gets `409` instead and learns nothing.)
 - **It can supply `destinations` on creation**, and Mantis fires the activation ping synchronously — so the key can make your instance POST to an attacker-chosen HTTP(S) endpoint (private, loopback and metadata addresses are rejected unless `ALLOW_PRIVATE_WEBHOOKS=1`) or, if `SMTP_URL` is set, send it mail.
 
 See the Kandji recipe in the product repo's `deploy/kandji/`.
@@ -107,10 +107,35 @@ constraint treats NULLs as distinct).
 
 This is the mechanism the fleet-enrollment flow relies on — one key per machine
 serial, so re-running enrollment on a reimaged machine reuses its key instead of
-littering the list. Enroll-scoped callers (and callers claiming another creator's
-`external_id`) get a reduced response shape — trigger URL and identity only, no
-alert routing or signing secrets. A claim that races a concurrent delete returns
-`409 conflict`; retry.
+littering the list. What a repeat POST returns depends on who is asking:
+
+- **the key's creator, or an admin** — the key as they could read it anyway
+  (full shape for full keys; the reduced shape below for enroll keys);
+- **an enrollment-scoped key that did not create it** — the reduced shape:
+  trigger URL, `public_id`, `external_id`, expiry and `disabled`, with `memo`
+  set to `null`. No alert routing, no signing secrets. Audited as
+  `key.claimed` with `cross_key: true`;
+- **any other full-scope key** — `409 conflict` with no key details, audited
+  as `key.claimed` with `denied: true`. If you rotate the full-scope key that
+  ran a pre-provisioning script, re-run it with an admin key.
+
+A claim that races a concurrent delete also returns `409 conflict`; retry.
+
+## Notification rows in hit listings
+
+Every hit returned by `/api/keys/:id/hits` and `/api/hits/recent` carries a
+`notifications` array — one row per destination the hit fanned out to, with
+`channel`, `status`, `attempts`, `max_attempts`, `next_attempt_at`,
+`succeeded_at`, `last_error`, `target` and `destination_scope`.
+
+`destination_scope` is `key` for a destination attached to the key itself,
+`global` for an instance-wide [global destination](/configuration#global-notification-destinations),
+and `unknown` when the destination has since been deleted. **`target` is `null`
+unless the caller may see it**: admins always may; a non-admin key owner sees
+only the targets of the key's own destinations. Global-destination targets are
+Slack / Discord / Teams / Home Assistant webhook URLs configured by an admin —
+they are credentials, so a non-admin never receives them. The dashboard hit
+feed and `mantis hits` render a placeholder for redacted rows.
 
 ## Response kinds for the trigger endpoint
 

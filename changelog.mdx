@@ -12,6 +12,22 @@ description: "Published Mantis releases — CLI and server — what changed and 
   to confirm CLI/server compatibility, and see [Updating](/updating) for the per-component
   update commands.
 </Note>
+## Server v0.2.0
+
+5 September 2026
+
+Security hardening release following the pre-launch audit (#86). Hit listings no longer expose admin-configured global webhook URLs to non-admin key owners, `external_id` claims by unrelated full keys are refused, installer templates neutralise hostile memos, API-key minting is admin-only, and `MANTIS_PUBLIC_PATH` finally routes.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/v0.2.0)
+
+## CLI v0.2.1
+
+5 September 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.2.1)
+
 ## CLI v0.2.0
 
 8 August 2026
