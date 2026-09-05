@@ -1654,7 +1654,7 @@ These are the variables operators usually need to understand.
 
   Upgrading from a pre-pepper deployment? Set the pepper once and existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 hashes too, and opportunistically re-hashes each row to the peppered form on next use. After a few weeks of normal traffic the legacy rows drain to zero.
 
-- `MANTIS_SECRET_KEY` *(optional)* — envelope-encryption key for operator secrets stored in the database: per-destination webhook HMAC signing secrets, the Apple Wallet auth secret, and the `.p12` certificate passphrase. When set, those columns are sealed at rest with AES-256-GCM (an `encv1:` envelope) so a database-only leak (backup, read replica) yields no usable secrets — the same trust model as the pepper above. Generate with `openssl rand -base64 32` (a 64-character hex string also works; it must decode to exactly 32 bytes). Leave it unset to keep plaintext-at-rest behavior. The feature is backward compatible: existing plaintext rows are read transparently, and once the key is set, new writes are encrypted while legacy rows migrate to ciphertext the next time a signing secret is rotated or the wallet config is re-saved. Don't rotate this key without re-saving those secrets, and don't remove it once rows are encrypted — reads of sealed values will then fail.
+- `MANTIS_SECRET_KEY` *(optional)* — envelope-encryption key for operator secrets stored in the database: per-destination webhook HMAC signing secrets, the Apple Wallet auth secret, and the `.p12` certificate passphrase. When set, those columns are sealed at rest with AES-256-GCM (an `encv1:` envelope) so a database-only leak (backup, read replica) yields no usable secrets — the same trust model as the pepper above. Generate with `openssl rand -base64 32` (a 64-character hex string also works; it must decode to exactly 32 bytes). Leave it unset to keep plaintext-at-rest behavior. The feature is backward compatible: existing plaintext rows are read transparently, and once the key is set, new writes are encrypted while legacy rows migrate to ciphertext the next time a signing secret is rotated. (A legacy DB wallet config can't be re-saved — wallet config is env-var driven now — so clear it from `/settings/wallet` instead of leaving its plaintext secrets in the database.) Don't rotate this key without re-saving those secrets, and don't remove it once rows are encrypted — reads of sealed values will then fail.
 
 ## URLs
 
@@ -1726,8 +1726,12 @@ cron mode runs the same sweep through `/api/cron/notifications`.
 
 ## Apple Wallet
 
-Apple Wallet can be configured with env vars or from the admin dashboard at
-`/settings/wallet`. Env vars take precedence over the DB-stored dashboard config.
+Apple Wallet is configured with env vars — mount the certificate and secrets
+with your deploy (e.g. docker secrets), not through the app. The admin page at
+`/settings/wallet` is read-only: it shows whether Wallet is configured and from
+which source. Earlier versions had a dashboard upload form that stored the
+config in the database; a leftover DB config still works (env vars take
+precedence) but can only be cleared from that page, not re-saved.
 
 Required to enable `.pkpass` generation:
 
@@ -2789,8 +2793,10 @@ contact `NOTE` (falling back to that same title when you give none).
 The key memo and title flow into these artifacts (document properties, calendar/contact fields), so Mantis sanitizes them on generation: control bytes illegal in XML 1.0 are stripped from the Office / SVG / HTML formats, and a lone carriage return is normalized in the line-oriented `.ics` / `.vcf` formats — both so a memo carrying stray control characters can't produce a file that silently fails to open or that injects a forged property line.
 
 Apple Wallet artifacts require an Apple Developer Pass Type ID certificate. Set
-the `APPLE_PASS_*` env vars or configure `/settings/wallet` as an admin. If
-Wallet is not configured, `format=apple-wallet` returns `503 not_configured`.
+the `APPLE_PASS_*` env vars on the server (see
+[Configuration](https://docs.mantis.privacykey.org/configuration#apple-wallet)); admins can check the current
+state at `/settings/wallet`. If Wallet is not configured, `format=apple-wallet`
+returns `503 not_configured`.
 
 # Honey directory
 Source: https://docs.mantis.privacykey.org/honey-directory
@@ -3132,7 +3138,8 @@ If you only ever mint one API key for your deploy you'll never notice the
 distinction; the schema is shaped that way so it's easy to later promote a
 shared instance to multi-user. Until then, treat every operator as admin and
 keep your bootstrap key safe. Admin privileges are also required for the
-instance-wide audit log and Apple Wallet settings. The `audit log`
+instance-wide audit log and the settings pages (global notify destinations,
+Apple Wallet status). The `audit log`
 (`mantis audit log`, admin-only) records create / update / delete / login /
 destination-secret / wallet-config events across the instance.
 
@@ -3160,7 +3167,7 @@ Implementation notes for key hashing, disabled-key behavior, and worker mode.
 - **API keys are stored as peppered HMAC-SHA-256 hashes.** Keys are random 192-bit keys with the `mantis_live_` prefix (matches GitHub's secret-scanning format, so a leaked key in a public repo will trigger their alerting). `MANTIS_API_KEY_PEPPER` is required for new mints; legacy pre-pepper SHA-256 rows are still accepted and are upgraded opportunistically on next use. Dashboard cookies carry opaque `mantis_sess_...` tokens; the database stores only a SHA-256 hash of each session token.
 - **Disabled or expired keys** still return the configured response — they just don't record a hit or fire notifications. This prevents an attacker from probing for valid key IDs by looking for differential responses.
 - **Notifications use a Postgres-backed queue.** Public trigger requests enqueue notification rows after the response path; a worker claims pending rows with `FOR UPDATE SKIP LOCKED`, sends them, and retries failures with backoff. The worker starts automatically on non-Vercel deployments. On Vercel or other serverless hosts, use `/api/cron/notifications` with `CRON_SECRET`.
-- **Operator secrets can be encrypted at rest.** Set `MANTIS_SECRET_KEY` (AES-256-GCM, `openssl rand -base64 32`) to envelope-encrypt webhook HMAC signing secrets and the Apple Wallet auth secret + cert passphrase in the database, so a DB-only leak yields no usable secrets. Unset = today's plaintext-at-rest behavior; existing rows are read transparently and migrate to ciphertext on the next rotate/re-save. See [Configuration](https://docs.mantis.privacykey.org/configuration#required).
+- **Operator secrets can be encrypted at rest.** Set `MANTIS_SECRET_KEY` (AES-256-GCM, `openssl rand -base64 32`) to envelope-encrypt webhook HMAC signing secrets and the Apple Wallet auth secret + cert passphrase in the database, so a DB-only leak yields no usable secrets. Unset = today's plaintext-at-rest behavior; existing rows are read transparently and migrate to ciphertext the next time a signing secret is rotated (a legacy DB wallet config can't be re-saved — clear it from `/settings/wallet` instead). See [Configuration](https://docs.mantis.privacykey.org/configuration#required).
 - **API-key auth failures are rate-limited.** Repeated failed bearer auth is throttled per client IP via a Postgres-backed fixed-window limiter (60/min) and returns `429` instead of `401` to blunt brute force; a successful auth never touches the limiter. The dashboard login action applies the same per-IP throttle to *failed* logins only (10/min), and only when a trusted client IP is available — so a flood of bad attempts can never lock out a valid key or the operator. The shared `rate_limits` table makes the cap hold across instances and serverless cold starts; the limiter fails open on a DB error.
 - **Alert payloads escape attacker-controlled values.** The hit IP, User-Agent, key memo, and the `host_context` parsed from `X-Mantis-*` headers are escaped before they're interpolated into Slack / Discord / Teams messages, so a canary tripper can't inject phishing links, channel mentions, or spoofed formatting into your alerts. The edge worker carries the same escapers and additionally drops the request query string from alert links.
 - **Outbound webhooks are SSRF-guarded.** Webhook / Slack / Discord / Teams deliveries enforce `http(s)`-only and refuse targets that resolve to RFC1918, loopback, link-local, or cloud-metadata (`169.254.169.254`) addresses, don't follow redirects, and re-validate the resolved address at connect time to close the DNS-rebinding window. Set `ALLOW_PRIVATE_WEBHOOKS=1` only when your webhook target is intentionally on the same LAN.
@@ -3435,12 +3442,12 @@ src/                         # Next.js server: dashboard, API, public triggers
     login/                   # API-key login form; mints httpOnly sessions
     logout/                  # POST clears the session cookie
     (app)/                   # authenticated dashboard route group
-      layout.tsx             # shared nav: keys, new, admin-only wallet settings
+      layout.tsx             # shared nav: keys, new, bulk, machine, dev inbox, admin-only settings
       keys/
         page.tsx             # key list, enable/disable controls
         new/                 # create form
         [id]/                # detail, hits, downloads, installers, destinations
-      settings/wallet/       # admin Apple Wallet / PassKit config
+      settings/wallet/       # admin Apple Wallet status (read-only; config via APPLE_PASS_* env)
       settings/notifications/ # admin instance-wide (global) notify destinations
     api/
       keys/...               # authenticated key CRUD, hits, downloads, installers

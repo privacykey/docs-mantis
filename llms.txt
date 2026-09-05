@@ -58,4 +58,4 @@ This file indexes the mantis documentation site at https://docs.mantis.privacyke
 ## Optional
 
 - [mantis source code](https://github.com/privacykey/mantis): the product these docs describe
-- [Documentation source](https://github.com/privacykey/mantis-docs): the repository this site is built from
+- [Documentation source](https://github.com/privacykey/docs-mantis): the repository this site is built from

@@ -2,7 +2,7 @@
   "name": "mantis-docs",
   "private": true,
   "homepage": "https://docs.mantis.privacykey.org",
-  "repository": "https://github.com/privacykey/mantis-docs",
+  "repository": "https://github.com/privacykey/docs-mantis",
   "scripts": {
     "dev": "npx --yes mint@latest dev",
     "build": "rm -rf dist export.zip && npx --yes mint@latest export && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore && node scripts/build-llms.mjs --dist dist",
