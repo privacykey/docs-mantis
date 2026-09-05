@@ -31,6 +31,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Regenerate llms.txt and llms-full.txt from the new changelog
+        run: npm run llms
+
       - name: Re-check after regeneration
         run: npm run check
 
@@ -44,6 +47,8 @@ jobs:
           commit-message: "docs: sync changelog from GitHub Releases"
           body: |
             Regenerated `changelog.mdx` from the product repo's GitHub Releases.
+
+            `llms.txt` and `llms-full.txt` are regenerated in the same commit so the AI-readable copy of the site stays in step.
 
             Reviewer checklist:
 

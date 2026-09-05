@@ -1,3 +1,7 @@
 # GitHub-facing repository documentation is not part of the Mintlify site.
 README.md
 deployment/README.md
+
+# Build output. A stale export must not be picked up as pages or copied into the next export.
+dist/
+export.zip

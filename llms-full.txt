@@ -1,0 +1,3491 @@
+# mantis documentation
+
+> Documentation for Mantis, a self-hostable canary key service.
+
+The full text of every page on https://docs.mantis.privacykey.org, in navigation order. Each page starts with a level-one heading and a Source line giving its canonical URL.
+
+# Mantis documentation
+Source: https://docs.mantis.privacykey.org/
+
+Install, deploy, operate, and extend Mantis canary keys.
+
+Mantis is a self-hostable canary key service. It gives you trigger URLs that fire when someone opens a bait file, starts a host event, hits a planted link, or trips an operational monitor.
+
+## Start here
+
+- [Getting started](https://docs.mantis.privacykey.org/getting-started) covers CLI install through your first key.
+- [Trying it locally](https://docs.mantis.privacykey.org/trying-locally) covers Docker evaluation, contributor setup, and benchmarks.
+- [Use cases](https://docs.mantis.privacykey.org/use-cases) shows defensive, detective, operational, and adversarial-research patterns.
+
+## Deploy Mantis
+
+- [Deployment overview](https://docs.mantis.privacykey.org/deployment) helps choose between local Docker, tunnels, and PaaS hosts.
+- [Local Docker](https://docs.mantis.privacykey.org/deployment/docker-local) is for evaluation and development.
+- [Tailscale](https://docs.mantis.privacykey.org/deployment/tailscale) and [Cloudflare Tunnel](https://docs.mantis.privacykey.org/deployment/cloudflare) expose a local host safely.
+- [Railway](https://docs.mantis.privacykey.org/deployment/railway), [Fly.io](https://docs.mantis.privacykey.org/deployment/fly), and [Render](https://docs.mantis.privacykey.org/deployment/render) run Mantis as a long-running service.
+- [mantis-edge](https://docs.mantis.privacykey.org/edge-deployment) covers the stateless Cloudflare Worker variant.
+
+## Build with Mantis
+
+- [HTTP API](https://docs.mantis.privacykey.org/api) documents endpoints, trigger responses, and webhook payloads.
+- [File keys](https://docs.mantis.privacykey.org/file-keys), [honey directories](https://docs.mantis.privacykey.org/honey-directory), and [host-event keys](https://docs.mantis.privacykey.org/host-events) cover the main trigger surfaces.
+- [Self-hosted app recipes](https://docs.mantis.privacykey.org/self-hosted-apps) show where to plant canaries in common apps.
+
+## Use these docs with an AI assistant
+
+The site follows the [llms.txt](https://llmstxt.org) convention. `/llms.txt` indexes every page, `/llms-full.txt` is the whole site in one Markdown file, and appending `.md` to any page URL returns that page as Markdown. Paste the full file into your assistant and ask it to walk you through a deployment.
+
+# Getting started
+Source: https://docs.mantis.privacykey.org/getting-started
+
+Install the CLI, choose a backend, log in, and create your first Mantis key.
+
+The CLI is the recommended way to drive mantis — the dashboard is a nice browser for hits, but the CLI does everything the dashboard does plus the things the dashboard doesn't (multi-profile, installer snippets, bulk-create, scriptable JSON output). Five steps from zero to a working canary (one of them optional):
+
+## 1. Install the CLI
+
+```bash
+brew install privacykey/tap/mantis
+```
+
+That gives you `mantis` on `$PATH` with shell completions, a man page, and the auto-update path from the Homebrew tap. (Building from source also works — see [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli#install-from-this-repo) for `npm link` instructions.)
+
+## 2. Pick where mantis lives
+
+The CLI talks to either of two backends, with the same command surface:
+
+| Backend | What it gives you | Where it runs |
+|---|---|---|
+| **Stateful server** (`mantis`) | Dashboard, hit history, audit log, multiple destinations per key, key revocation, monitor/status, optional Apple Wallet passes | Your own server. Docker Compose on a VPS, the [one-command Fly.io launcher](https://docs.mantis.privacykey.org/deployment/fly), or the [Railway / Render guides](https://docs.mantis.privacykey.org/deployment). **Don't run this on your laptop as your primary backend** — your laptop's not on the public internet at 3am when the canary fires. |
+| **Cloudflare Worker** (`mantis-edge`) | Sub-50ms response from the CF edge, no DB to host, "anyone with the AES key can mint", URLs are self-contained encrypted blobs | Cloudflare's edge — you deploy a single Worker via `pnpm --filter @mantis/edge run deploy` from the source checkout (see [`mantis-edge/`](https://github.com/privacykey/mantis/tree/main/mantis-edge)) |
+
+You can use **both**. Most people deploy the stateful server for primary tripwires (the ones you want a timeline + multi-destination management for), and reach for the edge variant for hand-off URLs that just need to fire a webhook without a central log.
+
+## 3. Log in
+
+For the stateful server:
+
+```bash
+mantis login
+# interactive: prompts for server URL + API key
+```
+
+For the edge worker (one-time, after you deploy the worker per [`mantis-edge/README.md`](https://github.com/privacykey/mantis/tree/main/mantis-edge)):
+
+```bash
+mantis edge keygen                       # makes a 32-byte AES key
+pnpm --filter @mantis/edge exec wrangler secret put MANTIS_EDGE_KEY
+mantis edge set-key https://mantis-edge.<your-subdomain>.workers.dev
+```
+
+Credentials live in your OS keychain — never on disk in plaintext. See [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli) for storage details.
+
+## 4. (Recommended) Set up a second profile for resilience
+
+Run a second backend (or share with a teammate's deployment) so that if one is down for maintenance, you can still mint and inspect keys. Profiles live in `~/.config/mantis/config.json`; the CLI stores each profile's API key in a separate keychain entry.
+
+```bash
+mantis --profile primary login --url https://mantis.example.com
+mantis --profile backup  login --url https://mantis-fallback.example.com  --no-switch
+
+# Day-to-day: stay on `primary`
+mantis new "ssh on prod-bastion" --install shell --ssh-only --out ~/.zshrc.d/mantis.sh
+
+# When `primary` is unavailable: one-off override
+mantis --profile backup new "urgent canary"
+
+# Or switch the active profile entirely:
+mantis profile use backup
+mantis whoami
+```
+
+Caveat worth knowing: a key minted on `primary` only exists on `primary`. Profiles don't replicate state — they let your *CLI* keep working when one backend is down, and they let you split keys across deployments by purpose (`prod` / `staging` / `personal` / `home-lab`). For genuine URL-level redundancy where the trigger URL itself doesn't depend on any one host, use `mantis edge mint` — encrypted edge URLs decrypt purely from the Cloudflare Worker secret and have no per-key server state.
+
+Once you have a few profiles configured, snapshot them with [`mantis backup`](https://docs.mantis.privacykey.org/cli-backup) into a passphrase-encrypted file so a new machine is one `mantis restore` away from your full setup — keychain entries, plugins, the lot.
+
+## 5. Create your first key
+
+```bash
+mantis new
+# bare invocation launches the interactive wizard (memo → installer? →
+# destinations loop → expiry → copy → summary/edit)
+```
+
+…or as a one-liner if you already know what you want:
+
+```bash
+mantis new "ssh on prod" \
+  --notify-webhook https://discord.com/api/webhooks/... \
+  --install shell --ssh-only \
+  --out ~/.zshrc.d/mantis.sh
+```
+
+That single command creates the server-side key, registers the Discord webhook destination (fires an activation ping right away), and writes the SSH-only shell snippet into your zshrc.d. Reload your shell and the next SSH login fires a Discord notification.
+
+For the stateless equivalent against the edge worker:
+
+```bash
+mantis edge mint \
+  --worker https://mantis-edge.<sub>.workers.dev \
+  --webhook https://discord.com/api/webhooks/... \
+  --channel discord \
+  --install shell --ssh-only \
+  --out ~/.zshrc.d/mantis.sh \
+  --test
+```
+
+`--test` fires a synthetic hit so you confirm the chain works before handing the URL off.
+
+For spreadsheet-driven setup (one row, one canary), bulk-create writes the URLs back into a CSV:
+
+```bash
+mantis bulk-create \
+  --csv smart-home-areas.csv \
+  --out smart-home-areas-with-urls.csv \
+  --memo-template "{{area}} - {{device}}"
+```
+
+The output CSV is your input with `mantis_id`, `mantis_url`, and four more
+columns appended. The input can also carry per-row `notify`, `response_kind`,
+`response_payload`, and `expires_at` columns so a row can vary from the rest —
+`response_kind`, `response_payload`, and `expires_at` override the matching flag,
+while a row's `notify` destinations are added on top of the `--notify` flags — see
+[`mantis bulk-create`](https://docs.mantis.privacykey.org/cli#mantis-bulk-create-alias-import-csv) for the full column list.
+
+See [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli) for the full command reference and [`COMMAND_MAP.md`](https://github.com/privacykey/mantis/blob/main/cli/COMMAND_MAP.md) for the option matrix.
+
+## Browse hits in the dashboard (optional)
+
+The web dashboard at `/keys` is handy for clicking through a key's hits and seeing the full headers/UA breakdown. The CLI exposes the same data:
+
+| Dashboard | CLI |
+|---|---|
+| `/keys` | `mantis list` |
+| `/keys/<id>` | `mantis show <id>` or `mantis hits <id> --follow` |
+| `/keys/new` | `mantis new` |
+| `/inbox` (dev only) | `mantis hits last --follow` against a key pointing at `/inbox/demo` |
+
+The dashboard authenticates by exchanging your API key for an httpOnly
+`mantis_session` cookie. The cookie contains an opaque session token; the
+database stores only its SHA-256 hash. Logout revokes the session row and
+clears the cookie.
+
+# Trying it locally
+Source: https://docs.mantis.privacykey.org/trying-locally
+
+Run Mantis locally with Docker or a contributor development setup.
+
+Two flavours of "running mantis on your laptop": the **Docker quickstart** is for kicking the tyres before you provision a real server; the **local dev** flow is for contributors who want to edit the source.
+
+## Docker quickstart (evaluation)
+
+Run the stack against your laptop with Docker:
+
+```bash
+git clone <this repo> mantis && cd mantis
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+docker compose up -d
+docker compose logs mantis | grep "bootstrap API key" -A1
+```
+
+`./scripts/setup.sh` (also `pnpm setup`) writes `.env` and generates the two
+secrets Compose refuses to start without — `POSTGRES_PASSWORD` (the DB password
+the app's `DATABASE_URL` is derived from) and `MANTIS_API_KEY_PEPPER`. It's
+idempotent, so re-running leaves existing secrets untouched.
+
+The first boot prints a bootstrap API key. Copy it; it won't be shown again.
+
+Then drive the CLI as usual, just pointing at localhost:
+
+```bash
+mantis --key mantis_live_... login --url http://localhost:3000
+
+# The dev image ships an inbox at /inbox; webhook captures land there with
+# zero external setup.
+mantis new "first mantis" -w http://localhost:3000/inbox/demo
+open http://localhost:3000/inbox
+mantis hits last --follow
+```
+
+When you're ready to move from "trying it" to "running it", pick a real deployment from [Deployment](https://docs.mantis.privacykey.org/deployment) and `mantis --profile prod login --url https://...` against it. The Docker localhost setup is for evaluation only — don't rely on it for canaries that need to fire when you're not at your machine.
+
+## Local dev (for contributors)
+
+The source workspace uses `pnpm@11.1.3` and requires Node `>=25.8.0`.
+
+```bash
+corepack enable
+pnpm install
+cp .env.example .env
+pepper="$(openssl rand -base64 32)"
+sed -i.bak "s|^MANTIS_API_KEY_PEPPER=.*|MANTIS_API_KEY_PEPPER=$pepper|" .env
+rm .env.bak
+# edit .env: at minimum set DATABASE_URL and keep MANTIS_API_KEY_PEPPER set
+
+# Start postgres separately (docker run -p 5432:5432 ... or use Neon/Supabase)
+pnpm run db:migrate
+pnpm run dev
+```
+
+First request prints a bootstrap API key to stdout.
+
+## Performance checks
+
+Benchmarks live under [`bench/`](https://github.com/privacykey/mantis/tree/main/bench) and are intentionally local, not CI-gated:
+
+```bash
+pnpm run bench:cli                  # CLI startup/rendering overhead
+pnpm run bench:edge                 # mantis-edge worker, requires `pnpm --filter @mantis/edge dev` running
+MANTIS_BENCH_KEY=mantis_live_... pnpm run bench:server
+```
+
+# What can you actually use this for?
+Source: https://docs.mantis.privacykey.org/use-cases
+
+Common defensive, detective, operational, and research patterns for Mantis canaries.
+
+A mantis URL fires whenever someone fetches it. That's a deliberately simple primitive — the interesting bit is *where* you embed it. A few categories that work well today:
+
+## Defensive — "did someone touch the thing they shouldn't?"
+
+- **Honey files on shared drives.** `mantis new "AWS-creds.txt" --pdf decoy.pdf` (or `--docx`, `--xlsx`, `--folder` for a 9-file bundle). Drop them in Finder/Explorer folders alongside real work. If a colleague's curiosity gets the better of them, or if an attacker mounts the drive after stealing creds, you find out the moment the file opens.
+- **Fake credentials in `.env` / `.zshrc` / browser bookmarks.** A URL in a "production database URL" comment is irresistible to whoever has shell access.
+- **SSH-login alarms on jump boxes.** `mantis new "ssh on prod-bastion" --install shell --ssh-only --out ~/.zshrc.d/mantis.sh`. Discord/Slack pings on every SSH login, with `$USER`, hostname, and the client IP captured. Quiet on local tmux panes thanks to `--ssh-only`.
+- **Sudo-watch.** `--install shell-sudo` wraps `sudo` so every privileged invocation in your shell sends a notification with the full command.
+
+## Detective — "where did my content end up?"
+
+- **Track visits to a specific URL on your site.** Drop a 1×1 GIF mantis (`--svg` or just the bare trigger URL) in an obscure page, an email signature, or a forum signature. Get notified when traffic crosses a threshold — useful for honeypages, archive-bot detection, or just knowing when someone visits a private link you shared.
+- **See if someone reads your email.** `mantis new "email beacon" --eml beacon.eml` produces a `.eml` file whose embedded reference fires when the mail client renders the message. Attach it (or open one yourself to test) and you'll know when it's been opened, by which IP / user-agent, and when. Same idea with `--ics` for "did they actually open the calendar invite" or `--vcf` for a contact card.
+- **Detect site clones.** `mantis new "brand homepage clone-detector" --install js-clone-detector --hostname app.example.com` — the script fires only when it runs on a hostname that isn't yours, capturing `location.href` and `document.referrer` so you can see *where* your site was copied to (phishing kits, scrapers).
+- **Find which document an insider exfiltrated.** Generate per-employee `.docx` / `.xlsx` versions of the same file via `mantis bulk-create --csv staff.csv --memo-template "{{name}} - Q4 strategy"`. If one of them leaks, the memo tells you who.
+- **Track a fake mobile pass.** After configuring Apple Wallet, `mantis download <key-id> --apple-wallet pass.pkpass` creates a signed pass that records Wallet install, uninstall, and fetch callbacks. Useful for bait badges, tickets, or access cards.
+
+## Operational — "tell me when X happens in my house / lab / fleet"
+
+- **Home Assistant + Scrypted hooks.** `mantis install <id> --type homeassistant` drops a `rest_command` block plus example automations into your HA config. Wire it to "front door opened after 11 PM", "garage camera came online", "unfamiliar device joined the LAN" — anything HA already knows about. Get the alert in the same Discord/Slack channel as your security stuff. The IoT helper at [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) adds an opt-in LAN watcher for hosts that aren't on HA.
+- **Unattended host wake-up / network changes.** `--install macos-wake` / `--install linux-wake` / `--install windows-wake` fires when the machine resumes from sleep. `*-network` types fire on Wi-Fi join / Ethernet plug — useful for "did my Raspberry Pi just appear on a strange network?"
+- **NFC tags at physical chokepoints.** `--install nfc-ndef` produces a URL you write to a blank NTAG sticker. Tape one to the back of a network closet door, your laptop lid, or a server rack. Anyone who taps with a phone fires it.
+- **CI / monitoring backstops.** Use the URL as a heartbeat the opposite way: configure your CI / cron to NOT fire it on success, and have Uptime Kuma watch the matching status endpoint. Silence = healthy. The `mantis monitor <id> --mode latch` flag turns this on.
+
+## Adversarial-research — "spread the URL on purpose"
+
+- **Public paste/scraper bait.** Push tokens shaped like AWS keys, GitHub PATs, or `.env` files into public Pastebins / GitHub gists with the URL embedded as a "real" endpoint. Useful for measuring how fast credential-scraping bots in your industry actually act. (For the stateless variant where you really don't want a server-side hit log, `mantis edge mint` is appropriate.)
+- **Tarpit your phishing kit.** When you find a copy of your site running on `evil-bank-login.tk`, hand them a mantis-watermarked logo so every visitor fires a hit and you can correlate to the kit's victim list.
+
+## Stateless variant via `mantis-edge`
+
+When you want sub-50ms Cloudflare-edge response, no DB to host, and "anyone with the AES key can mint" semantics (CI service accounts, hand-off URLs that should not appear in a central audit log), use `mantis edge mint --install <type>` instead of `mantis new --install <type>`. The host snippets are identical; only the URL shape and where the audit lives differ. See [`mantis-edge/README.md`](https://github.com/privacykey/mantis/tree/main/mantis-edge) for the full edge-vs-stateful trade-off.
+
+# Deployment
+Source: https://docs.mantis.privacykey.org/deployment
+
+Choose how to run Mantis and expose a public trigger URL.
+
+The mantis needs a public-reachable URL. Pick the option that matches where you want to run it.
+
+| | What runs where | Public URL via | When this is right |
+|---|---|---|---|
+| **A. [Local Docker](https://docs.mantis.privacykey.org/deployment/docker-local)** | Your machine | None (localhost only) | Development, testing, air-gapped use |
+| **B. [Docker + Tailscale](https://docs.mantis.privacykey.org/deployment/tailscale)** | Your machine | Tailscale Funnel (`*.ts.net`) | Personal mantis on a laptop / home server, works behind CGNAT |
+| **C. [Docker + Cloudflare Tunnel](https://docs.mantis.privacykey.org/deployment/cloudflare)** | Your machine | Your own domain on Cloudflare | You already have a Cloudflare-hosted domain and want SSO via Cloudflare Access |
+| **E1. [Railway](https://docs.mantis.privacykey.org/deployment/railway)** | Railway (long-running) | `*.up.railway.app` or custom | Set-and-forget; the worker runs natively with no cron config |
+| **E2. [Fly.io](https://docs.mantis.privacykey.org/deployment/fly)** | Fly (long-running) | `*.fly.dev` or custom | Same shape as Railway, with broader regional choice |
+| **E3. [Render](https://docs.mantis.privacykey.org/deployment/render)** | Render (long-running) | `*.onrender.com` or custom | Same shape; free tier exists but cold-starts after 15 min idle |
+
+For any public option, also see [public edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits) for rate-limit and DDoS guidance, and [backups](https://docs.mantis.privacykey.org/deployment/backups) for Postgres backup strategies.
+
+## Quick-pick: A vs B vs C
+
+Both B and C give you a public HTTPS URL for mantis running on your own hardware. The differences:
+
+| | Tailscale (B) | Cloudflare (C) |
+|---|---|---|
+| Need to own a domain? | No, uses `*.ts.net` | Yes, must be on Cloudflare |
+| Setup steps | ~3 | ~5 |
+| Dashboard SSO | Tailnet membership / ACLs in split mode | Cloudflare Access, one app and one policy |
+
+## Edge variant
+
+The stateless [`mantis-edge`](https://github.com/privacykey/mantis/tree/main/mantis-edge) Cloudflare Worker is a separate concept. It runs on Cloudflare's edge with no DB, and URLs decrypt purely from the Worker's secret. See [mantis-edge deployment](https://docs.mantis.privacykey.org/edge-deployment) for the Worker setup.
+
+# Local Docker
+Source: https://docs.mantis.privacykey.org/deployment/docker-local
+
+Run Mantis locally with Docker for evaluation or development.
+
+```bash
+git clone <this repo> mantis && cd mantis
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+docker compose up -d
+docker compose logs mantis | grep "bootstrap API key" -A1
+```
+
+Mantis is bound to `127.0.0.1:3000` by default. Reachable from the host only. To expose to LAN: set `MANTIS_BIND_HOST=0.0.0.0` in `.env`.
+
+`./scripts/setup.sh` (also `pnpm setup`) generates the two required secrets into
+`.env`: `POSTGRES_PASSWORD` — the single source of truth for the database
+password, from which Docker Compose derives the app's `DATABASE_URL` — and
+`MANTIS_API_KEY_PEPPER`. It's idempotent, so re-running leaves existing secrets
+untouched. Compose refuses to start if either is empty, so `cp .env.example .env`
+alone is not enough. Keep the pepper stable for that database; rotating it
+invalidates existing API keys.
+
+The Docker localhost setup is for **evaluation only** — don't rely on it for canaries that need to fire when you're not at your machine.
+
+# Deploying Mantis with Tailscale
+Source: https://docs.mantis.privacykey.org/deployment/tailscale
+
+Expose Mantis through Tailscale Funnel with simple or split public routes.
+
+This sets up mantis to run in Docker on your own hardware (laptop, home
+server, NAS, VPS) and expose it through Tailscale. There are two useful modes:
+
+| Mode | Public internet | Tailnet-only | Best for |
+|---|---|---|---|
+| Simple Funnel | Whole app | Same URL | Personal installs where mantis API-key auth is enough |
+| Split Serve + Funnel | `/c/*`, `/status/*`, `/api/wallet/*` | Dashboard + `/api/*` | Keeping sensitive dashboard/API routes off the public internet |
+
+The split mode is closest to the Cloudflare Access posture: public tripwires
+keep working, while management traffic only works from your tailnet.
+
+## Prerequisites
+
+- Docker + Docker Compose.
+- A [Tailscale](https://tailscale.com) account.
+- A reusable Tailscale auth key. Split mode starts two Tailscale nodes, so a
+  one-use key will register only the first one.
+
+## Step 1 — One-time tailnet configuration
+
+These settings live in the [Tailscale admin console](https://login.tailscale.com/admin)
+and only need to be done once per tailnet.
+
+1. **Enable HTTPS Certificates** — `DNS` → **Enable HTTPS**. This lets Tailscale
+   issue certificates for `*.<tailnet>.ts.net`.
+2. **Enable Funnel** — `Funnel` → **Enable Funnel for this tailnet**. Without
+   this, Funnel config is ignored and the public hostname is tailnet-only.
+3. **If you use ACLs**, add a tag owner so the Docker nodes can register tagged:
+
+   ```json
+   "tagOwners": {
+     "tag:mantis": ["autogroup:admin"]
+   }
+   ```
+
+## Step 2 — Generate an auth key
+
+Go to **Settings → Keys → Generate auth key** with these properties:
+
+| Setting | Recommended | Why |
+|---|---|---|
+| Reusable | Yes | Needed for split mode's two Tailscale containers |
+| Ephemeral | Yes | Container restarts clean up old node entries |
+| Pre-approved | Yes | Avoids manual approval every compose recreate |
+| Tags | `tag:mantis` | Optional, useful for ACLs |
+| Expiry | 90 days | Tailscale's usual max for auth keys |
+
+Copy the `tskey-auth-...` value.
+
+## Option A — Simple Funnel
+
+This is the existing one-host setup. It exposes the whole app publicly through
+Funnel; dashboard and API routes still require mantis auth.
+
+```bash
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+# Then edit .env:
+#   TS_AUTHKEY=tskey-auth-xxxxxxxxxxxx
+#   TS_HOSTNAME=mantis
+#   PUBLIC_BASE_URL=https://mantis.<your-tailnet>.ts.net
+
+docker compose --profile tailscale up -d
+```
+
+`./scripts/setup.sh` generates the two secrets Compose won't start without —
+`POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER` — so you only fill in the
+Tailscale and URL values above. A plain `cp .env.example .env` leaves
+`POSTGRES_PASSWORD` empty and the stack refuses to boot.
+
+Verify:
+
+```bash
+docker compose logs tailscale | grep -E "Success|funnel"
+curl -i https://mantis.<your-tailnet>.ts.net/status/nonexistent
+```
+
+## Option B — Split Serve + Funnel
+
+This is the recommended Tailscale posture when you want `/api/*` and the
+dashboard off the public internet.
+
+It starts two Tailscale sidecars:
+
+- `mantis-private.<tailnet>.ts.net` uses Tailscale Serve only. This is where
+  you open the dashboard and point the CLI.
+- `mantis-public.<tailnet>.ts.net` uses Tailscale Funnel. Mantis allows only
+  public routes on this host: `/c/*`, `/status/*`, and `/api/wallet/*`.
+
+Run `./scripts/setup.sh` first to create `.env` with the two required secrets
+(`POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER`), then add the split-host
+configuration to it:
+
+```bash
+TS_AUTHKEY=tskey-auth-xxxxxxxxxxxx
+TS_PRIVATE_HOSTNAME=mantis-private
+TS_PUBLIC_HOSTNAME=mantis-public
+TS_EXTRA_ARGS=--advertise-tags=tag:mantis
+
+# Generated trigger/status/wallet URLs should be public.
+PUBLIC_BASE_URL=https://mantis-public.<your-tailnet>.ts.net
+
+# This host is public-only. Dashboard and management API paths return 404 here.
+PUBLIC_ONLY_HOSTS=mantis-public.<your-tailnet>.ts.net
+
+# This host is allowed to serve the dashboard and management API.
+DASHBOARD_HOSTS=mantis-private.<your-tailnet>.ts.net
+
+# Usually useful behind Tailscale's proxy so hit logs show client IPs.
+TRUST_PROXY_HEADERS=1
+```
+
+Start it:
+
+```bash
+docker compose --profile tailscale-split up -d
+```
+
+Verify public behavior from a non-tailnet network, for example a phone on
+cellular:
+
+```bash
+curl -i https://mantis-public.<your-tailnet>.ts.net/status/nonexistent
+curl -i https://mantis-public.<your-tailnet>.ts.net/login
+curl -i https://mantis-public.<your-tailnet>.ts.net/api/keys
+```
+
+Expected:
+
+- `/status/nonexistent` reaches mantis and returns `404 not_monitored`.
+- `/login` returns a plain `404`.
+- `/api/keys` returns a plain `404`, not a mantis auth challenge.
+
+Verify private behavior from a device on your tailnet:
+
+```bash
+open https://mantis-private.<your-tailnet>.ts.net/login
+mantis login --url https://mantis-private.<your-tailnet>.ts.net
+mantis list
+mantis doctor --public-url https://mantis-public.<your-tailnet>.ts.net
+```
+
+Use the private hostname for dashboard and CLI. Use the public hostname for
+generated mantis trigger/status URLs; `PUBLIC_BASE_URL` already handles that.
+`mantis doctor` verifies the private API, then checks the public hostname hides
+`/login` and `/api/*` while leaving `/status/*` reachable.
+
+## Public edge limits
+
+Tailscale Funnel is not a full application-layer WAF. Split mode is the main
+protection: only `/c/*`, `/status/*`, and `/api/wallet/*` should be reachable
+on the public Funnel hostname.
+
+If the public hostname will be widely exposed or advertised, use one of these:
+
+- Prefer Cloudflare Tunnel instead of Funnel when you own a domain and want
+  per-path URL and rate limiting rules.
+- Or put nginx/Caddy between Tailscale and Mantis, then point the Tailscale
+  Serve/Funnel config at that proxy.
+
+Suggested limits and a minimal nginx shape are in
+[`edge-limits.md`](https://docs.mantis.privacykey.org/deployment/edge-limits#tailscale-funnel).
+
+### Optional public routes
+
+The public-only guard is deliberately tight. These are opt-in:
+
+```bash
+# Public load balancer / uptime probes against /api/health.
+PUBLIC_ONLY_ALLOW_HEALTH=1
+
+# Dev-only webhook inbox routes. Leave off in production.
+ENABLE_DEV_INBOX=1
+PUBLIC_ONLY_ALLOW_INBOX=1
+```
+
+## Gotchas
+
+- **Funnel is public, Serve is private.** Tailscale Serve can identify tailnet
+  users and obeys tailnet ACLs; Funnel is for unauthenticated public internet
+  exposure. The split setup uses both.
+- **One port cannot be both private and public on one Tailscale node.** That is
+  why split mode uses two Tailscale containers and two hostnames.
+- **Funnel hostnames are `*.ts.net`.** Tailscale Funnel is tied to tailnet DNS
+  names. If you need `mantis.yourdomain.com` plus browser SSO, Cloudflare
+  Tunnel + Access is still the cleaner fit.
+- **Apple Wallet callbacks live under `/api/wallet/*`.** They stay public in
+  split mode because installed passes need to call back without being on your
+  tailnet.
+- **The dev inbox is intentionally unsafe for production.** It is an
+  unauthenticated capture buffer. Keep `ENABLE_DEV_INBOX=0` unless you are
+  actively testing.
+
+## Uninstalling cleanly
+
+Simple mode:
+
+```bash
+docker compose --profile tailscale down -v
+```
+
+Split mode:
+
+```bash
+docker compose --profile tailscale-split down -v
+```
+
+The ephemeral nodes disappear from **Machines** shortly after shutdown. Revoke
+the auth key in **Settings → Keys** if you do not plan to reuse it.
+
+# Deploying Mantis with Cloudflare Tunnel and Access
+Source: https://docs.mantis.privacykey.org/deployment/cloudflare
+
+Expose a local Mantis instance through Cloudflare Tunnel and optional Access SSO.
+
+This sets up mantis to run in Docker on your own hardware and exposes it on the public internet at `mantis.<your-domain>` via **Cloudflare Tunnel**. Optionally, you can put parts of mantis behind **Cloudflare Access** for SSO (Google/GitHub/email-OTP/etc.).
+
+When this is the right choice:
+- You already own a domain that's on Cloudflare DNS (or are willing to move one).
+- You want a `mantis.<your-domain>` URL rather than `*.ts.net`.
+- You like the idea of SSO-gating the dashboard for free (up to 50 users).
+- You're OK with all mantis traffic flowing through Cloudflare's edge.
+
+## Prerequisites
+
+- Docker + Docker Compose.
+- A domain you own. Any registrar.
+- Cloudflare account, free tier. Two things must be in place:
+  1. The domain's **nameservers must point at Cloudflare**. Add the domain in the main Cloudflare dashboard → it gives you two NS values → change them at your registrar → wait for propagation (5 min to a few hours).
+  2. A **Cloudflare Zero Trust team** must be created (free, 50 seats). See Step 1 below.
+
+## Step 1 — Create a Zero Trust team
+
+Cloudflare Zero Trust is a separate dashboard at `https://one.dash.cloudflare.com` (different URL from the main CF dashboard).
+
+1. Go to [one.dash.cloudflare.com](https://one.dash.cloudflare.com). First visit prompts for **team name** — becomes `<team>.cloudflareaccess.com`. Pick whatever.
+2. Choose the **Free** plan (50 seats).
+3. (Skip for now) Identity providers. We'll come back to this only if you decide to enable Access in Step 7.
+
+## Step 2 — Create the tunnel
+
+1. **Networks → Tunnels → Create a tunnel**.
+2. **Connector type**: `Cloudflared`.
+3. Name: `mantis` → Save.
+4. The next screen shows install commands for various OSes. **Ignore them** — we run cloudflared inside Docker via our compose file. What you need is the **key** (long JWT) shown under "Install and run a connector". Copy it.
+5. Click **Next**.
+6. **Public Hostnames** tab → Add a public hostname:
+   - **Subdomain**: `mantis` (or your preference)
+   - **Domain**: select your zone
+   - **Path**: leave blank (matches everything)
+   - **Type**: `HTTP`
+   - **URL**: `mantis:3000`  ← this is the Docker service name; cloudflared resolves it via the compose network
+   - **Additional application settings → HTTP Settings → HTTP Host Header**: `mantis.<your-domain>` (helps with cookie domain matching for the dashboard)
+7. **Save** → Cloudflare auto-creates the DNS record. No manual DNS needed.
+
+## Step 3 — Configure and start
+
+```bash
+cd mantis
+./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
+# Then edit .env:
+#   CLOUDFLARE_TUNNEL_TOKEN=eyJh...
+#   PUBLIC_BASE_URL=https://mantis.<your-domain>
+
+docker compose --profile cloudflared up -d
+```
+
+`./scripts/setup.sh` generates `POSTGRES_PASSWORD` and `MANTIS_API_KEY_PEPPER`,
+which Compose refuses to start without — a plain `cp .env.example .env` leaves
+`POSTGRES_PASSWORD` empty and the stack won't boot.
+
+## Step 4 — Verify
+
+```bash
+docker compose logs cloudflared | grep "Registered tunnel"
+# Should see 4 lines, one per Cloudflare edge connection
+```
+
+```bash
+curl -i https://mantis.<your-domain>/status/nonexistent
+# 404 not_monitored JSON from mantis = working
+```
+
+Browser: open `https://mantis.<your-domain>` → mantis `/login`.
+
+## Step 5 — Add public edge limits
+
+Before sharing trigger URLs broadly, add Cloudflare rules for the public Mantis
+surfaces:
+
+- block oversized `/c/*`, `/status/*`, and `/api/wallet/*` URLs
+- rate-limit `/c/*` and `/status/*` by client IP
+- keep `/inbox*` and `/api/inbox` blocked unless this is a deliberate dev box
+
+Use the exact expressions and suggested thresholds in
+[`edge-limits.md`](https://docs.mantis.privacykey.org/deployment/edge-limits#cloudflare-tunnel-or-cloudflare-in-front-of-any-host).
+
+## Step 6 — Bootstrap an API key
+
+```bash
+docker compose logs mantis | grep -A1 "bootstrap API key"
+```
+
+Paste into the dashboard login.
+
+---
+
+## Step 7 (optional) — Cloudflare Access
+
+**This is the part where you need to make a decision.** Before adding Access, decide what paths to gate. There are three reasonable levels:
+
+| Level | Paths gated by CF Access | CLI works? | Webhook delivery to mantis? | Dashboard auth |
+|---|---|---|---|---|
+| **No Access** | nothing | Yes | Yes | API key only |
+| **Dashboard-only** | `/`, `/keys*`, `/settings*`, `/login*`, `/logout*` | Yes | Yes | CF SSO + API key |
+| **Full (recommended)** | above + management API routes (`/api/keys*`, `/api/hits*`, `/api/api-keys*`, `/api/audit*`, `/api/cron*`, optionally `/api/health`) | **Yes** via `mantis cloudflare login` or `set-service-auth` | Yes (webhooks hit `/c/*`, `/status/*`, wallet callbacks, and optional dev inbox routes which stay open) | CF SSO + API key |
+
+> The CLI now supports auth-passthrough for Cloudflare Access. The auth flow happens entirely on your machine: the CLI gets a short-lived JWT from `cloudflared` (via SSO) **or** sends a Service Auth header pair — and forwards it on every management API call. Mantis itself doesn't validate Cloudflare JWTs; it just receives requests that have already passed CF's gate, then validates the API key as usual. The server stays unaware of Cloudflare.
+
+### Recommended setup: full gating with CLI passthrough
+
+The CLI handles Cloudflare auth client-side. Server is none the wiser. Two flavors, pick one:
+
+#### Option 1 — SSO (real user identity, recommended for personal use)
+
+Requires the `cloudflared` binary on every machine where you run the CLI.
+
+```bash
+# 1. Install cloudflared once:
+#    https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/
+brew install cloudflared    # macOS
+
+# 2. Authenticate (opens browser to your Cloudflare Access SSO):
+mantis cloudflare login --app=https://mantis.your-domain.com
+
+# 3. Verify:
+mantis cloudflare status
+#   mode:        sso
+#   app URL:     https://mantis.your-domain.com
+#   cloudflared: installed
+#   key:       cached + valid
+
+# 4. Use normally — CLI auto-injects the Cloudflare JWT on every /api/* call:
+mantis list
+mantis hits <id>
+```
+
+Re-run `mantis cloudflare login` whenever the JWT expires (Cloudflare default: 24h).
+
+#### Option 2 — Service Auth (headless / CI use, pre-shared key)
+
+For machines where opening a browser isn't an option (servers, CI runners, etc.):
+
+```bash
+# 1. In Cloudflare Zero Trust → Access → Service Auth → Create Service Key
+#    Name it "mantis cli". Copy the Client-ID (ends in .access) and Client-Secret.
+# 2. Edit the Mantis Access application: add a Service Auth policy that allows
+#    this service key (Access app → Edit → Policies → Add → "Service Auth").
+# 3. Configure the CLI:
+mantis cloudflare set-service-auth \
+  --client-id  <id>.access \
+  --client-secret <secret>
+
+# 4. Verify + use:
+mantis cloudflare status
+mantis list
+```
+
+The CLI sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on every `/api/*` request. Cloudflare Access validates them at the edge and passes through.
+
+#### Cloudflare app configuration (either option)
+
+1. **Settings → Authentication → Login methods**. Add at least one (email OTP is simplest; SSO providers for teams).
+2. **Access → Applications → Add an application** → Self-hosted.
+3. **Configuration:**
+   - **Application name**: "Mantis"
+   - **Session duration**: 24h
+   - **Application Domain**: `mantis.<your-domain>`
+4. **Paths**: gate dashboard and management API routes:
+   - `/`
+   - `/login*`
+   - `/logout*`
+   - `/keys*`
+   - `/settings*`
+   - `/api/keys*`
+   - `/api/hits*`
+   - `/api/api-keys*`
+   - `/api/device-profiles*`
+   - `/api/audit*`
+   - `/api/cron*`
+5. **Identity providers** (for Option 1 / browser SSO): tick the methods you configured.
+6. **Policies** → add as needed:
+   - **Operator** — Allow, Selector: Emails matching your address (for SSO / browser login).
+   - **Mantis CLI** — Service Auth, Selector: your service key (only if using Option 2).
+7. **Save**.
+
+What stays public (don't gate these):
+- `/c/*` — mantis triggers. **Must** be public; this is the whole point.
+- `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll.
+- `/api/wallet/*` — Apple Wallet callbacks. Required only if you enable `.pkpass` support.
+- `/api/health` — optional public health check. Gate it unless an external public monitor needs it.
+- `/inbox*` and `/api/inbox` — dev webhook inbox. Disable for production with `ENABLE_DEV_INBOX=0` if you don't need it.
+
+### After Access is on
+
+**Dashboard (browser):**
+1. Visit `https://mantis.<your-domain>/keys` → Cloudflare redirects to `<team>.cloudflareaccess.com` → email-OTP / SSO login.
+2. After auth, redirects back to mantis.
+3. Mantis shows `/login` (paste API key).
+4. After paste, dashboard appears.
+
+Effectively two-factor (CF SSO + mantis API key). If the double login bothers you, lobby for the "mint mantis session from CF JWT" feature — it would replace step 3.
+
+**CLI:**
+- With SSO mode: the CLI calls `cloudflared access token --app=…` for each request, getting a cached short-lived JWT. Transparent after the initial `mantis cloudflare login`.
+- With Service Auth: the CLI sends the stored Client-ID/Secret headers. No browser interaction ever.
+- All credential state lives on your machine. The mantis server never sees Cloudflare config and doesn't need to verify anything Cloudflare-related — Access has already validated the request before mantis ever sees it.
+
+---
+
+## Gotchas
+
+- **Cloudflare terminates TLS.** All mantis traffic — including potentially sensitive hit metadata — passes through Cloudflare's edge in plaintext. If your mantis catches genuinely confidential content (email contents, document bodies), CF logs see it. Privacy tradeoff worth knowing.
+- **Free Access seats: 50.** Plenty for personal / small team. Past that, paid plan.
+- **Origin protection.** Cloudflare recommends locking your origin to only accept traffic from CF IPs. Mantis already binds to `127.0.0.1` (only reachable inside the Docker network, where cloudflared also lives), so this is taken care of without extra config.
+- **Cloudflare Access cookie + Set-Cookie domain.** If you see the dashboard login cookie not sticking, check the HTTP Host Header setting from Step 2.6 — it should be `mantis.<your-domain>`, not `localhost:3000`.
+
+## Uninstalling cleanly
+
+```bash
+docker compose --profile cloudflared down
+```
+
+- In Cloudflare Zero Trust: **Networks → Tunnels → mantis → Delete**. Also removes the DNS record.
+- **Access → Applications → Mantis dashboard → Delete** if you set that up.
+- The DNS record auto-cleans on tunnel deletion (Cloudflare-managed).
+
+# Railway deploy
+Source: https://docs.mantis.privacykey.org/deployment/railway
+
+Deploy Mantis on Railway with a long-running container and Postgres add-on.
+
+Railway runs the mantis as a long-running container with their Postgres add-on. No template button (yet) — manual setup takes ~3 minutes.
+
+## Steps
+
+1. Fork this repo (so Railway can hook into your GitHub).
+2. Go to [railway.app/new](https://railway.app/new) → **Deploy from GitHub repo** → pick the fork.
+3. Railway auto-detects the Next.js app and starts a build. **Cancel the first build** — we need to add Postgres and env vars first.
+4. In the project, click **+ New** → **Database** → **Add PostgreSQL**. Railway provisions it and exposes `DATABASE_URL` as a service variable.
+5. On the mantis service, **Variables** → add:
+   - `DATABASE_URL` → use the **Reference** syntax to link to the Postgres service: `${{ Postgres.DATABASE_URL }}`
+   - `PUBLIC_BASE_URL` → leave blank for now; you'll fill it in after step 7
+   - `MANTIS_API_KEY_PEPPER` → generate with `openssl rand -base64 32`. Required. **Do not rotate after the first key is minted** — it invalidates every existing API key.
+   - `AUTO_MIGRATE` → `1`
+   - `BOOTSTRAP_API_KEY` → generate one with `node -e "console.log('mantis_live_' + require('crypto').randomBytes(24).toString('base64url'))"` and save it locally — you'll need it to log into the dashboard
+   - (Optional) `SMTP_URL`, `SMTP_FROM` for email notifications
+6. On the mantis service, **Settings** → **Networking** → **Generate Domain**. Railway gives you a `<name>.up.railway.app` URL.
+7. Set `PUBLIC_BASE_URL` to that URL (e.g., `https://mantis.up.railway.app`) and redeploy.
+8. Before broad public use, decide whether to keep the Railway domain directly
+   exposed or put a Cloudflare-proxied custom domain in front for WAF/rate
+   limiting. See [public edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits#railway).
+9. Visit `https://<your-domain>/login`, paste the `BOOTSTRAP_API_KEY` you generated. Done.
+
+## Public edge limits
+
+Railway's edge currently enforces useful platform limits, including a 32 KB
+combined request-header limit and network-level DDoS mitigation, but Railway
+does not provide an application-layer WAF. For public Mantis trigger URLs, the
+recommended production posture is:
+
+1. Add a custom domain to the Mantis Railway service.
+2. Put that hostname behind Cloudflare's orange-cloud proxy.
+3. Configure the `/c/*`, `/status/*`, and optional `/api/wallet/*` rules in
+   [public edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits#cloudflare-tunnel-or-cloudflare-in-front-of-any-host).
+4. Set `TRUST_PROXY_HEADERS=1` only when Cloudflare is the public entry point
+   and no direct Railway hostname is advertised.
+
+## Notes
+
+- Railway no longer has a true free tier; expect ~$5/month for the smallest combined plan (mantis service + Postgres).
+- The notify worker runs natively (no cron config needed — `instrumentation.ts` auto-detects non-Vercel and starts it).
+- Auto-deploys on push to the connected branch.
+- To use an external Postgres (Neon, Supabase) instead of Railway Postgres: drop the linked DB and set `DATABASE_URL` to an external connection string.
+
+## Redis/Valkey for rate limiting?
+
+Not by default. A shared Redis/Valkey limiter is useful only if you run multiple
+Mantis replicas or need strict shared counters. For a single Railway Mantis
+service, start with Cloudflare/proxy limits plus the built-in duplicate
+suppression.
+
+Railway Redis is deployed as another service. Using Railway's current resource
+pricing, a tiny 256 MB Redis/Valkey service is about $2.50/month in RAM before
+CPU and storage; Hobby's $5/month minimum counts toward usage, so it may fit
+inside the minimum if the rest of the project is small. It does add another
+private-network round trip to each `/c/*` hit and another service to operate.
+
+# Fly.io
+Source: https://docs.mantis.privacykey.org/deployment/fly
+
+Deploy Mantis to Fly.io with one command, Postgres, and safe proxy defaults.
+
+The repository includes an idempotent launcher that creates the Fly app,
+connects Postgres, sets the required secrets, deploys Mantis, and prints the
+first admin API key.
+
+## Quick launch
+
+Prerequisites:
+
+- A Fly.io account and [`flyctl`](https://fly.io/docs/flyctl/install/).
+- A local clone of the Mantis repository.
+- `fly auth login` completed once.
+
+```bash
+git clone https://github.com/privacykey/mantis
+cd mantis
+fly auth login
+
+bash deploy/fly-launch.sh --app my-mantis --region iad
+```
+
+The launcher shows the app-machine and database choices before creating
+anything. Add `--dry-run` to print the planned commands, or `--yes` to skip the
+confirmation prompt:
+
+```bash
+bash deploy/fly-launch.sh \
+  --app my-mantis \
+  --region iad \
+  --dry-run
+```
+
+On a first launch, save the `mantis_live_...` admin key printed at the end. It
+is shown once and works for both the dashboard login and `mantis login`.
+
+## Database choices
+
+The default is Fly Managed Postgres. It is the supported Fly database product,
+but it is billed separately and can cost considerably more than the small
+Mantis app machine. The launcher surfaces that before provisioning.
+
+| Option | Behaviour | When to use it |
+|---|---|---|
+| `--db mpg` | Creates and attaches Fly Managed Postgres. This is the default. | You want the supported, managed Fly option. |
+| `--db external` | Imports the `DATABASE_URL` already present in your environment. | You use Neon, Supabase, or another external Postgres provider. |
+| `--db unmanaged` | Creates a legacy `fly postgres` machine. | You accept operating and recovering Postgres yourself. |
+| `--db none` | Skips database setup. | You will attach or configure Postgres separately before the app can start. |
+
+For an external database:
+
+```bash
+DATABASE_URL='postgres://...' \
+  bash deploy/fly-launch.sh --app my-mantis --db external
+```
+
+## Safe re-runs and configuration checks
+
+Re-running the launcher is safe: it reuses an existing app and database and
+refuses to rotate `MANTIS_API_KEY_PEPPER`, because rotating that value would
+invalidate every API key.
+
+If `fly.toml` already exists, the launcher leaves it untouched and checks its
+public origin before deploying:
+
+- `PUBLIC_BASE_URL` must be a quoted absolute `https://` URL.
+- A `*.fly.dev` URL must match the app passed with `--app`.
+- An intentional custom HTTPS domain is accepted.
+- Missing `TRUST_PROXY_HEADERS` remains a warning so existing deployments are
+  not blocked, but it should be fixed before relying on hit IP attribution.
+
+The generated configuration enables trusted proxy headers and pins attribution
+to Fly's authoritative `X-Forwarded-For` value. Without those settings,
+production deployments record a null client IP. If a custom domain is proxied
+through Cloudflare, follow the comments in `deploy/fly.toml.example` and use
+`cf-connecting-ip` instead.
+
+## Later deployments
+
+To redeploy from your machine, either re-run the launcher with the same options
+or deploy the existing configuration directly:
+
+```bash
+fly deploy --app my-mantis --config fly.toml
+```
+
+The repository also includes an opt-in
+[`fly-deploy.yml`](https://github.com/privacykey/mantis/blob/main/.github/workflows/fly-deploy.yml)
+workflow for deploys from `main`. It stays inert until you configure the
+app-scoped `FLY_API_TOKEN`, `FLY_APP`, and `FLY_DEPLOY_ENABLED=true` repository
+settings described at the top of that file.
+
+## Verify
+
+```bash
+curl https://my-mantis.fly.dev/api/health
+mantis login --url https://my-mantis.fly.dev
+mantis doctor
+```
+
+The health response should report `"status":"ok"` and `"db":"ok"`.
+
+Fly concurrency protects the VM, not the public canary URL. For app-layer
+rate limits and DDoS guidance, see **[edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits#flyio)**.
+
+# Render
+Source: https://docs.mantis.privacykey.org/deployment/render
+
+Deploy Mantis on Render with a Blueprint and managed service.
+
+```bash
+cp deploy/render.yaml.example render.yaml
+# commit and push; then create a Render Blueprint pointing at the repo
+```
+
+The blueprint declares `MANTIS_API_KEY_PEPPER` as a required secret. Generate it
+with `openssl rand -base64 32` when Render prompts for the value, and keep it
+stable for the life of the database.
+
+Free tier spins down after 15 min idle → first mantis trigger after idle takes 30–60s. For real mantis use, upgrade to Starter ($7/mo) or use Railway/Fly.
+
+For app-layer URL/rate limits, use a Cloudflare-proxied custom domain; see **[edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits#render)**.
+
+# Public edge limits
+Source: https://docs.mantis.privacykey.org/deployment/edge-limits
+
+Recommended edge URL, body, and rate limits for public Mantis routes.
+
+Mantis trigger URLs are intentionally public. Put coarse limits at the first
+public edge so abusive traffic is dropped before it reaches Node, Postgres, or
+the notification queue.
+
+## Recommended baseline
+
+Use these as starting values, then adjust for your traffic:
+
+| Surface | Methods | URL limit | Body limit | Rate limit |
+|---|---:|---:|---:|---:|
+| `/c/*` | `GET`, `HEAD`, `POST` | 2 KB | 16 KB | 120/min/IP |
+| `/status/*` | `GET`, `HEAD` | 1 KB | 0 | 240/min/IP |
+| `/api/wallet/*` | Wallet methods | 4 KB | 64 KB | 120/min/IP |
+| `/inbox*`, `/api/inbox` | dev only | 2 KB | 1 MiB | private/dev only |
+
+Notes:
+
+- `/c/:public_id` only needs a short public ID and an optional short `src`
+  query parameter. A 2 KB URI ceiling is generous.
+- Mantis does not need request bodies on `/c/*`; `POST` is accepted only for
+  clients that can only signal by POST.
+- If you intentionally embed long attribution in query strings, raise the URL
+  limit for `/c/*` and keep the app's storage caps in sync.
+- Node's default HTTP request-header limit is 16 KiB. Railway's public proxy
+  allows 32 KB combined headers. The app stores request fields with caps above
+  the Node default so normal accepted traffic is preserved.
+- Mantis also enforces app-level body caps where it parses request bodies:
+  management JSON bodies are capped at 64 KiB, Apple Wallet log bodies at
+  32 KiB, and the dev inbox capture at 1 MiB. Oversized parsed bodies return
+  `413 payload_too_large`.
+- Stored hit headers are allowlisted and capped. Credential-shaped names such
+  as `authorization`, cookies, session tokens, CSRF tokens, and API-key-looking
+  headers are dropped before storage; `x-mantis-*` installer headers are kept.
+
+## Cloudflare Tunnel or Cloudflare in front of any host
+
+Cloudflare is the cleanest place to enforce app-layer limits for public Mantis
+URLs. Rules only apply when the DNS record is proxied through Cloudflare.
+
+### Custom rule: reject oversized public URLs
+
+Dashboard path:
+
+1. Cloudflare dashboard -> your zone -> Security -> WAF -> Custom rules.
+2. Create a rule named `mantis public URL limits`.
+3. Expression:
+
+```text
+(
+  starts_with(http.request.uri.path, "/c/")
+  and len(http.request.uri) > 2048
+)
+or
+(
+  starts_with(http.request.uri.path, "/status/")
+  and len(http.request.uri) > 1024
+)
+or
+(
+  starts_with(http.request.uri.path, "/api/wallet/")
+  and len(http.request.uri) > 4096
+)
+or
+(
+  starts_with(http.request.uri.path, "/inbox")
+  or starts_with(http.request.uri.path, "/api/inbox")
+)
+```
+
+4. Action: `Block`.
+5. Deploy.
+
+If you changed `MANTIS_PUBLIC_PATH`, replace `/c/` with that path.
+
+### Rate limiting rules
+
+Dashboard path:
+
+1. Security -> WAF -> Rate limiting rules.
+2. Create one rule for `/c/*`:
+   - Expression: `starts_with(http.request.uri.path, "/c/")`
+   - Characteristics: IP address
+   - Period: 60 seconds
+   - Requests: 120
+   - Mitigation timeout: 60 seconds
+   - Action: Block or Managed Challenge
+3. Create one rule for `/status/*`:
+   - Expression: `starts_with(http.request.uri.path, "/status/")`
+   - Characteristics: IP address
+   - Period: 60 seconds
+   - Requests: 240
+   - Mitigation timeout: 60 seconds
+   - Action: Block
+4. If Apple Wallet is enabled, create one rule for `/api/wallet/*`:
+   - Expression: `starts_with(http.request.uri.path, "/api/wallet/")`
+   - Characteristics: IP address
+   - Period: 60 seconds
+   - Requests: 120
+   - Mitigation timeout: 60 seconds
+   - Action: Block
+
+Request body-size matching with `http.request.body.size` is an Enterprise
+feature. On Free/Pro/Business plans, enforce body size in an origin proxy
+such as nginx/Caddy or rely on Mantis not reading `/c/*` bodies.
+
+Cloudflare references:
+
+- [Rules language functions](https://developers.cloudflare.com/ruleset-engine/rules-language/functions/)
+- [Rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/)
+- [Request body size field](https://developers.cloudflare.com/ruleset-engine/rules-language/fields/reference/http.request.body.size/)
+
+## Railway
+
+Railway has useful network limits, but not an app-layer WAF. Railway documents
+a 32 KB combined header limit, about 11,000 requests/sec per domain, and L4
+DDoS mitigation; it explicitly recommends Cloudflare when you need WAF
+functionality.
+
+Recommended Railway setup:
+
+1. Deploy Mantis on Railway as usual.
+2. Add a custom domain in Railway.
+3. Put that hostname in Cloudflare DNS with the orange cloud enabled.
+4. Add the Cloudflare custom and rate limiting rules above.
+5. Set `TRUST_PROXY_HEADERS=1` only when Cloudflare is the public entry point.
+
+Without Cloudflare, keep `MANTIS_DUPLICATE_LOG_LIMIT` low and use hit
+retention so known URLs cannot grow the database indefinitely.
+
+Railway references:
+
+- [Public networking specs and limits](https://docs.railway.com/networking/public-networking/specs-and-limits)
+- [Pricing](https://docs.railway.com/pricing)
+- [Redis service](https://docs.railway.com/guides/redis)
+
+### Railway Redis/Valkey for shared rate limiting
+
+Mantis does not require Redis/Valkey by default. Adding it on Railway means
+running another always-on service. Based on Railway's current usage pricing:
+
+- RAM is billed at $10/GB-month.
+- CPU is billed at $20/vCPU-month by actual usage.
+- Volume storage is $0.15/GB-month.
+- Hobby has a $5/month minimum that counts toward usage.
+
+A small Redis/Valkey limiter using 256 MB of RAM costs about $2.50/month in RAM
+before CPU and storage. If your Mantis app plus Postgres are still under the
+Hobby included usage, it may not change the bill; otherwise it adds a few
+dollars per month. Performance is usually fine for a limiter, but every `/c/*`
+hit adds a private-network round trip before the DB insert. Prefer Cloudflare
+or provider edge limits first, then add Redis/Valkey only if you run multiple
+Mantis replicas or need strict shared counters.
+
+## Fly.io
+
+Fly's `http_service.concurrency` protects each Machine from too many concurrent
+requests, but it is not a per-IP rate limiter or WAF. The example
+`deploy/fly.toml.example` already uses request-based concurrency.
+
+Recommended Fly setup:
+
+1. Keep `type = "requests"` with a hard limit your VM can actually handle.
+2. Use a Cloudflare-proxied custom domain for the public hostname if the
+   Mantis URL will be exposed broadly.
+3. Add the Cloudflare rules above.
+
+Fly reference:
+
+- [Concurrency settings](https://fly.io/docs/apps/concurrency/)
+
+## Render
+
+Render provides DDoS protection automatically, but application-layer abuse is
+still your responsibility. Use a Cloudflare-proxied custom domain if you need
+per-path URL and rate limits before traffic reaches the service.
+
+Render reference:
+
+- [DDoS protection](https://render.com/docs/ddos-protection)
+
+## Tailscale Funnel
+
+Tailscale Funnel is convenient, but it is not a full WAF. Use split mode from
+[`tailscale.md`](https://docs.mantis.privacykey.org/deployment/tailscale) so only public routes are exposed, and keep
+dashboard/API traffic on the private Serve hostname.
+
+For stricter public limits with Tailscale:
+
+1. Prefer Cloudflare Tunnel if you own a domain and want edge rules.
+2. Or put nginx/Caddy between the Funnel sidecar and Mantis, then point
+   Tailscale Serve/Funnel at that local proxy instead of `mantis:3000`.
+
+Minimal nginx location shape:
+
+```nginx
+client_max_body_size 16k;
+large_client_header_buffers 4 8k;
+
+location /c/ {
+  limit_except GET HEAD POST { deny all; }
+  limit_req zone=mantis_trigger burst=20 nodelay;
+  proxy_pass http://mantis:3000;
+}
+
+location /status/ {
+  limit_except GET HEAD { deny all; }
+  limit_req zone=mantis_status burst=20 nodelay;
+  proxy_pass http://mantis:3000;
+}
+```
+
+You would also need a matching `limit_req_zone` in nginx's `http` block. This
+is intentionally not in the default compose file because it adds another moving
+part for the common personal setup.
+
+## Local Docker
+
+The compose file binds Mantis to `127.0.0.1` by default. That is the best local
+limit: no public edge exists. If you set `MANTIS_BIND_HOST=0.0.0.0`, put a
+local reverse proxy in front before exposing it to untrusted networks.
+
+# Backups and retention
+Source: https://docs.mantis.privacykey.org/deployment/backups
+
+Back up and restore the Postgres database that stores Mantis data.
+
+Mantis stores everything in Postgres. Backup = `pg_dump` the database.
+
+Two reasons to back up:
+
+- **Disaster recovery** — restore on a new host if the server dies.
+- **Schema rollback** — migrations are forward-only. If an upgrade damages data or you need the old shape back, only a backup recovers it cleanly.
+
+## Local Postgres (docker compose)
+
+```bash
+docker compose exec -T postgres pg_dump -U mantis -d mantis -Fc > "mantis-$(date +%Y%m%d).dump"
+```
+
+`-Fc` = custom format, smaller and restore-flexible.
+
+Restore on a fresh container:
+
+```bash
+docker compose down -v postgres   # wipes the volume
+docker compose up -d postgres
+sleep 5
+docker compose exec -T postgres pg_restore -U mantis -d mantis --no-owner < mantis-20260513.dump
+```
+
+## Managed Postgres (Neon / Supabase / Railway / Fly Postgres)
+
+Each provider has its own snapshot mechanism. Don't rely on theirs alone — they all have edge cases (Neon's free branches expire, Railway's snapshots disappear with a project delete). Schedule your own `pg_dump` to S3 / B2 / GCS in parallel.
+
+```bash
+# Cron entry, runs daily at 03:17
+17 3 * * * pg_dump "$DATABASE_URL" -Fc | aws s3 cp - s3://my-backups/mantis-$(date +\%F).dump
+```
+
+## What's in there
+
+| Table | Backup-worthy? |
+|---|---|
+| `api_keys` | Yes — losing this means re-bootstrapping & re-distributing keys |
+| `keys` | Yes — losing this loses every configured mantis URL |
+| `hits` | Yes (but bounded by retention) — forensic history |
+| `notifications` | Yes (bounded by retention) — delivery state, in-flight retries |
+| `notification_destinations` | Yes — channel config + activation status |
+| `audit_events` | Yes — operator and key-management history |
+| `sessions` | Usually — dashboard login sessions; can be dropped if you are comfortable logging in again |
+| `wallet_config` | Yes — Pass Type ID cert + password (sensitive!) |
+| `wallet_registrations` | Yes if using Apple Wallet — device push tokens for pass update notifications |
+
+`wallet_config` contains the .p12 password in plaintext, and notification
+tables can contain webhook targets and signing secrets. Dump files should be
+encrypted at rest (`gpg --symmetric`, or rely on bucket-level KMS).
+
+## Retention
+
+Hit / notification growth is the table to watch. With heavy use a single high-traffic key can add 10k+ rows/day.
+
+Built-in retention (see `.env.example`):
+
+```bash
+MANTIS_HIT_RETENTION_DAYS=90           # delete hits + their notifications
+MANTIS_NOTIFICATION_RETENTION_DAYS=30  # delete settled notifications
+MANTIS_AUDIT_RETENTION_DAYS=365        # delete audit events
+MANTIS_SESSION_RETENTION_DAYS=7        # delete expired/revoked sessions
+```
+
+The notify worker sweeps hourly. In serverless cron mode, the same sweep runs
+through `/api/cron/notifications`. All unset = retain forever — appropriate for
+low-traffic deployments.
+
+Manual cleanup if you don't want a fixed retention:
+
+```sql
+-- Delete a specific noisy key's hits older than a week
+DELETE FROM hits
+WHERE key_id = '<uuid>' AND occurred_at < now() - interval '7 days';
+
+-- Compact disk after large deletes
+VACUUM FULL hits;  -- holds an exclusive lock; offline-only
+-- ...or in normal operation:
+VACUUM ANALYZE hits;
+```
+
+## Restoring a single key
+
+If you accidentally `DELETE FROM keys WHERE id = ...`, restoring just that row from a dump:
+
+```bash
+pg_restore -a -t keys -t hits -t notifications --data-only \
+  -d mantis-restore mantis-20260513.dump
+# then INSERT … SELECT into the live DB
+```
+
+Easier: keep a full `mantis-restore` DB around for the most recent dump and copy rows over as needed.
+
+# Deploying mantis-edge
+Source: https://docs.mantis.privacykey.org/edge-deployment
+
+Deploy the stateless Cloudflare Worker version of Mantis.
+
+This guide covers the Cloudflare Worker version of mantis. It has no database and no dashboard: the encrypted URL contains the webhook destination, and the webhook receiver becomes the audit log.
+
+## Prerequisites
+
+- A Cloudflare account with Workers enabled.
+- Node 25.8 or newer.
+- The [mantis CLI](https://github.com/privacykey/mantis/tree/main/cli), linked or runnable from the source repository.
+
+```bash
+corepack enable
+pnpm install
+cd mantis-edge
+```
+
+## 1. Generate and store the edge key
+
+Generate one 32-byte base64url key:
+
+```bash
+mantis edge keygen
+```
+
+Set it as a Worker secret. Wrangler prompts for the value — paste the base64url key from the previous step:
+
+```bash
+pnpm exec wrangler secret put MANTIS_EDGE_KEY
+```
+
+Save the same key locally so the CLI can mint URLs. The CLI also prompts; paste the key again:
+
+```bash
+mantis edge set-key https://mantis-edge.<your-subdomain>.workers.dev
+```
+
+(You can also pass the key as a second positional argument for non-interactive use: `mantis edge set-key <url> <key>`.)
+
+The key is the minting authority. Anyone with it can create valid edge URLs, so keep it in the OS keychain via the CLI and avoid putting it in shell history or CI logs.
+
+## 2. Restrict webhook destinations
+
+For defense-in-depth, set an optional comma-separated allowlist. Wrangler prompts for the value:
+
+```bash
+pnpm exec wrangler secret put MANTIS_EDGE_WEBHOOK_ALLOWLIST
+```
+
+Examples:
+
+```text
+hooks.slack.com,discord.com,*.example.com
+```
+
+Rules are hostname-only:
+
+- `hooks.slack.com` matches exactly `hooks.slack.com`.
+- `*.example.com` matches subdomains like `alerts.example.com`, but not `example.com`.
+- Full URLs are accepted in the setting, but only their hostname is used.
+
+When the allowlist is set, encrypted URLs with non-matching webhook hosts return the same `404` as invalid URLs. The Worker logs a sanitized host-only message for the operator.
+
+## 3. Deploy
+
+```bash
+pnpm exec wrangler deploy
+```
+
+Or let the CLI wrap it — [`mantis edge deploy`](https://docs.mantis.privacykey.org/cli#mantis-edge-deploy) runs the
+worker's own `wrangler deploy` via `npx`, captures the deployed URL, and with
+`--set-key` stores the AES key for it in one step.
+
+Wrangler prints the deployed Worker URL, usually:
+
+```text
+https://mantis-edge.<your-subdomain>.workers.dev
+```
+
+If you use a custom domain, add a route in `wrangler.toml`:
+
+```toml
+[[routes]]
+pattern = "edge.example.com/*"
+zone_name = "example.com"
+```
+
+Then deploy again and store the custom URL locally:
+
+```bash
+mantis edge set-key https://edge.example.com <paste-key>
+mantis profile set-edge prod --worker https://edge.example.com
+```
+
+## 4. Verify
+
+Mint a URL that posts to a test webhook. Use `--channel` to pick a payload format the receiver understands (`webhook`, `slack`, `discord`, `teams`); omit it for raw `mantis.hit` JSON. Add `--test` to fire a synthetic hit right after mint so you find out about config drift (allowlist, key mismatch) before handing the URL off:
+
+```bash
+mantis edge mint \
+  --worker https://edge.example.com \
+  --webhook https://hooks.slack.com/services/... \
+  --channel slack \
+  --memo "edge smoke test" \
+  --test
+```
+
+Trigger it:
+
+```bash
+curl -i "https://edge.example.com/c/<encrypted-blob>"
+```
+
+Expected:
+
+- The HTTP response matches the minted response kind, usually `200 image/gif`.
+- The webhook receives a `mantis.hit` payload.
+- Cloudflare Worker logs stay quiet on success.
+
+Runtime behavior mirrors the stateful server where it matters for safety:
+redirect and HTML responses include `cache-control: no-store`, HTML responses
+also include a restrictive CSP sandbox, and forwarded webhook payloads include
+only an allowlisted/capped header snapshot. Credential-shaped request headers
+such as cookies, `authorization`, Cloudflare Access JWTs, session tokens, CSRF
+tokens, and API-key-looking names are dropped before forwarding; `x-mantis-*`
+installer headers are preserved.
+
+For failure debugging:
+
+```bash
+pnpm exec wrangler tail
+```
+
+Webhook failures are logged with the target origin only, not the full webhook path or query.
+
+## 5. Local development
+
+```bash
+cp .dev.vars.example .dev.vars
+# Fill MANTIS_EDGE_KEY and optional MANTIS_EDGE_WEBHOOK_ALLOWLIST.
+pnpm run dev
+```
+
+Wrangler serves the Worker at:
+
+```text
+http://localhost:8787
+```
+
+Store the local worker URL if you want to mint against it:
+
+```bash
+mantis edge set-key http://localhost:8787 <paste-key>
+mantis edge mint --worker http://localhost:8787 --webhook http://localhost:3000/inbox/edge
+```
+
+## 6. CI deploys
+
+Use Cloudflare's API token support for CI:
+
+```bash
+CLOUDFLARE_API_TOKEN=<token> pnpm run deploy
+```
+
+Set Worker secrets outside the deploy command. For hosted CI, prefer Cloudflare dashboard secrets or a one-time setup step:
+
+```bash
+printf '%s' "$MANTIS_EDGE_KEY" | pnpm exec wrangler secret put MANTIS_EDGE_KEY
+printf '%s' "$MANTIS_EDGE_WEBHOOK_ALLOWLIST" | pnpm exec wrangler secret put MANTIS_EDGE_WEBHOOK_ALLOWLIST
+```
+
+Keep the minting key out of repository variables that broad groups can read.
+
+## 7. Rotation
+
+Rotating `MANTIS_EDGE_KEY` immediately invalidates all existing edge URLs. A practical rotation:
+
+1. Generate a new key with `mantis edge keygen`.
+2. Update the Worker secret with `pnpm exec wrangler secret put MANTIS_EDGE_KEY` (paste the new key when prompted).
+3. Update the local CLI key with `mantis edge set-key <url>` (paste the new key when prompted).
+4. Re-mint any URLs that should keep working.
+
+Use `--expires-at` when minting short-lived URLs so old URLs naturally age out.
+
+# HTTP API
+Source: https://docs.mantis.privacykey.org/api
+
+Reference for key management endpoints, trigger responses, and webhook payloads.
+
+The CLI is the recommended interface, but everything it does is exposed over a plain JSON HTTP API. Useful for scripts in languages without a Mantis client, or for testing the trigger path with `curl`:
+
+```bash
+export MANTIS=http://localhost:3000
+export KEY=mantis_live_...   # `mantis login` output, or read from the bootstrap log
+
+# Mint a key
+curl -sX POST $MANTIS/api/keys \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"memo":"first mantis","destinations":[{"channel":"webhook","target":"https://webhook.site/<your-id>"}]}'
+# → { "id":"...", "public_id":"...", "url":"http://localhost:3000/c/...", ... }
+
+# Trigger it
+curl -i $MANTIS/c/<public_id>
+# → 200 OK with a 1×1 transparent GIF
+
+# Inspect hits
+curl -s $MANTIS/api/keys/<id>/hits -H "Authorization: Bearer $KEY" | jq
+```
+
+## Endpoint reference
+
+Management endpoints are API-key authenticated with `Authorization: Bearer mantis_live_...`.
+Dashboard helper endpoints that need browser access also accept the `mantis_session`
+httpOnly cookie. Public trigger, status, health, wallet, and dev-inbox routes
+are called out explicitly below.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/keys` | Create a key. Bearer auth. Body: `{ memo, external_id?, response_kind?, response_payload?, destinations?, expires_at?, dedupe_window_seconds?, monitor_mode?, monitor_window_seconds? }`. Supply `external_id` to make creation idempotent — see [below](#idempotent-creation). The one route enrollment-scoped keys may call. |
+| `GET` | `/api/keys?limit=&cursor=` | List accessible keys. Bearer auth. Admin keys see all; non-admin keys see rows they created. |
+| `GET` | `/api/keys/:id` | Get one accessible key. Bearer auth. |
+| `PATCH` | `/api/keys/:id` | Update memo, response, expiry, dedupe, monitor mode/window, `disabled`, or replace destinations. Bearer auth. |
+| `DELETE` | `/api/keys/:id` | Hard-delete a key and cascading hits/notifications. Bearer auth. |
+| `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. |
+| `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer auth. |
+| `GET` | `/api/keys/:id/download?format=<format>` | Download a generated artifact. Bearer or session auth. Formats: `docx`, `xlsx`, `pptx`, `pdf`, `folder`, `nfc-label`, `apple-wallet`, `svg`, `html`, `md`, `eml`, `ics`, `vcf`, `rtf`, `cookies`, `bookmarks`, `env`, `aws-credentials`, `netrc`, `kubeconfig`, `ovpn`, `rdp`. See [file keys](https://docs.mantis.privacykey.org/file-keys). |
+| `POST` | `/api/keys/bulk-download` | Zip one generated artifact per key. Bearer or session auth. Body: `{ ids, format }`, max 50 ids; returns a `.zip` with one artifact (or per-key folder) per key. Ids not visible to the caller are silently skipped, not rejected. |
+| `POST` | `/api/keys/device-bundle` | Package an already-minted device suite into an installable zip. Bearer or session auth. Body: `{ device, os, vectors }`, max 20 vectors; returns the install zip, or a JSON file map with `?format=json`. Backs the dashboard's device page and `mantis device new --bundle`. |
+| `GET` | `/api/keys/:id/install?type=<type>[&hostname=example.com][&format=json]` | Generated installer snippet for host, web, NFC, and IoT events. Bearer or session auth. |
+| `POST` | `/api/keys/:id/reset` | Reset a key's latched monitor state. Bearer or session auth. |
+| `POST` | `/api/keys/:id/destinations/:destinationId/signing-secret` | Reveal a webhook destination's plaintext HMAC signing secret. Bearer or session auth. Audited. |
+| `POST` | `/api/keys/:id/destinations/:destinationId/rotate-secret` | Rotate a webhook destination's HMAC signing secret and return the new secret once. Bearer or session auth. Audited. |
+| `GET` | `/api/api-keys` | List API keys. Bearer auth. Hashes are never returned; non-admin keys see only themselves. Each row includes its `scope`. |
+| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth. Body: `{ name, is_admin?, scope? }`; plaintext key returned once. Only admins can mint admin keys. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). |
+| `DELETE` | `/api/api-keys/:id` | Revoke an API key. Bearer auth. Self-revoke is allowed; revoking others requires admin. |
+| `GET` | `/api/device-profiles` | The device-profile / vector catalog used by `mantis device`. Bearer or session auth. |
+| `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. |
+| `GET` `HEAD` | `/api/health` | **Public unless gated by your proxy.** Liveness + `SELECT 1` readiness. 200 = app and DB ok, 503 = DB failure. |
+| `GET` `POST` | `/api/cron/notifications?max=<n>` | Notification retry and retention worker endpoint for serverless deployments. Requires `Authorization: Bearer $CRON_SECRET`; returns 401 if `CRON_SECRET` is unset. |
+| `GET` `HEAD` | `/status/:public_id` | **Public.** Uptime-monitor status endpoint. 200 = ok, 503 = tripped, 404 = not monitored / disabled / expired / unknown. Does not record a hit. |
+| `GET` `HEAD` `POST` | `/c/:public_id` | **Public.** Records a hit, returns the configured response. |
+| `ANY` | `/inbox/<slug>` | **Dev only.** Captures webhook-style requests when `ENABLE_DEV_INBOX=1`. |
+| `GET` `DELETE` | `/api/inbox` | **Dev only.** Read or clear the in-memory dev inbox when `ENABLE_DEV_INBOX=1`. Bearer or session auth. |
+| `POST` | `/api/wallet/v1/log` | **Public Apple Wallet web service.** Accepts Wallet diagnostics. |
+| `GET` | `/api/wallet/v1/passes/:passTypeId/:serial` | **Public Apple Wallet web service.** Authenticates `Authorization: ApplePass <token>`, records `wallet-fetched`, returns the latest `.pkpass`. |
+| `GET` | `/api/wallet/v1/devices/:deviceId/registrations/:passTypeId` | **Public Apple Wallet web service.** Wallet update poll; returns 204 and does not record a hit. |
+| `POST` `DELETE` | `/api/wallet/v1/devices/:deviceId/registrations/:passTypeId/:serial` | **Public Apple Wallet web service.** Records `wallet-installed` on registration and `wallet-uninstalled` on removal. |
+
+Parsed request bodies are bounded. `POST /api/keys` and
+`POST /api/api-keys` reject JSON bodies over 64 KiB with
+`413 payload_too_large`. Apple Wallet log bodies are capped at 32 KiB, and the
+dev inbox capture path is capped at 1 MiB.
+
+Supported installer `type` values are `shell`, `shell-sudo`,
+`macos-login`, `macos-boot`, `macos-wake`, `macos-network`,
+`linux-boot`, `linux-wake`, `linux-network`, `windows-logon`,
+`windows-wake`, `windows-network`, `css-background`, `js-clone-detector`,
+`nfc-ndef`, `homeassistant`, `homeassistant-receiver`, and `scrypted`.
+
+Webhook destinations get an HMAC secret. Outbound raw-webhook deliveries include
+`X-Mantis-Timestamp` and `X-Mantis-Signature: sha256=<hex>` over
+`<timestamp>.<json body>`. The plaintext secret is only shown on create, replace,
+explicit reveal, or rotate responses; normal listing returns a fingerprint.
+
+## API key scope: full vs enroll
+
+Every API key carries a `scope`, orthogonal to `is_admin`:
+
+- **`full`** (default) — behaves as described throughout this page. Subject to the admin / non-admin visibility rules.
+- **`enroll`** — create-only. An enroll key may call **only** `POST /api/keys`. Every other management route (list/read/update/delete keys — including the ones it created — plus `/api/hits/recent`, `/api/api-keys`, the audit log, and any session-reachable route) returns `403 forbidden`, and an enroll key cannot log in to the dashboard. `is_admin: true` together with `scope: "enroll"` is rejected at validation.
+
+Enroll keys are the intended credential for MDM / fleet provisioning: you embed one on every managed machine and accept that a curious user will extract it. An extracted enroll key cannot read hit history, alert routing or signing secrets, and cannot enumerate or list keys — but it is not inert, so size the blast radius before you embed one:
+
+- **It can confirm and retrieve any key whose `external_id` it guesses.** A `POST /api/keys` that collides with an existing `external_id` returns that key's trigger URL, memo, `public_id` and expiry (`"reused": true`, HTTP `200`) — see [Idempotent creation](#idempotent-creation) — regardless of which API key created it. `mantis device` derives `external_id`s deterministically as `mantis:device:<os>:<normalized-name>:<slug>`, so an attacker who knows your naming convention can guess a machine's ids and read back that machine's canary URLs, which is exactly what lets an intruder route around the tripwires. Each such claim is recorded in the audit log as `key.claimed`.
+- **It can supply `destinations` on creation**, and Mantis fires the activation ping synchronously — so the key can make your instance POST to an attacker-chosen HTTP(S) endpoint (private, loopback and metadata addresses are rejected unless `ALLOW_PRIVATE_WEBHOOKS=1`) or, if `SMTP_URL` is set, send it mail.
+
+See the Kandji recipe in the product repo's `deploy/kandji/`.
+
+## Idempotent creation
+
+`POST /api/keys` also accepts an optional `external_id` (1–128 chars, matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]*$`) stored on a unique column. When supplied, a
+repeat POST with the same `external_id` returns the **existing** key —
+`"reused": true` with HTTP `200` instead of `201` — rather than minting a
+duplicate. The other body fields (`memo`, `destinations`, …) apply only when the
+row is actually created; a later claim never mutates what the key was first
+configured with. Keys created without an `external_id` are unaffected (unique
+constraint treats NULLs as distinct).
+
+This is the mechanism the fleet-enrollment flow relies on — one key per machine
+serial, so re-running enrollment on a reimaged machine reuses its key instead of
+littering the list. Enroll-scoped callers (and callers claiming another creator's
+`external_id`) get a reduced response shape — trigger URL and identity only, no
+alert routing or signing secrets. A claim that races a concurrent delete returns
+`409 conflict`; retry.
+
+## Response kinds for the trigger endpoint
+
+| `response_kind` | Payload | Result |
+|---|---|---|
+| `gif` (default) | — | `200` + 1×1 transparent GIF |
+| `empty` | — | `204 No Content` |
+| `json` | any | `200` + JSON body |
+| `redirect` | `{"url":"..."}` | `302` to that HTTP(S) URL with no-store cache headers |
+| `html` | `{"html":"..."}` | `200 text/html` with no-store cache headers and a restrictive CSP sandbox |
+
+## Webhook payload
+
+```json
+{
+  "type": "mantis.hit",
+  "key": { "id": "...", "public_id": "...", "memo": "...", "url": "..." },
+  "hit": {
+    "id": "...",
+    "occurred_at": "2026-05-12T10:00:00.000Z",
+    "ip": "203.0.113.5",
+    "user_agent": "Mozilla/5.0 ...",
+    "referer": null,
+    "ua_browser": "Chrome",
+    "ua_os": "macOS",
+    "ua_device": "desktop",
+    "bot_label": null,
+    "is_duplicate": false,
+    "headers": { "host": "...", "accept": "...", "x-mantis-source": "shell", "x-mantis-user": "alice", "x-mantis-ssh-client": "203.0.113.42 54321 22", "..." : "..." }
+  }
+}
+```
+
+Webhook payloads also include a parsed `host_context` object when the hit came from one of our installer snippets:
+
+```json
+"host_context": {
+  "source": "shell",
+  "user": "alice",
+  "host": "alice-mbp",
+  "ssh_client": "203.0.113.42 54321 22",
+  "ssh_client_ip": "203.0.113.42",
+  "ssh_connection": "203.0.113.42 54321 10.0.0.5 22",
+  "tty": "/dev/pts/0",
+  "sudo_cmd": null,
+  "network_interface": null
+}
+```
+
+For a `shell-sudo` hit you'd see `"source": "shell-sudo", "sudo_cmd": "apt update --quiet"`. For a `linux-network` hit, `"source": "linux-network", "network_interface": "wlan0"`. Fields not relevant to the installer are `null`.
+
+`host_context` is `null` for hits that didn't include `X-Mantis-*` headers (e.g., a file/folder key, or a regular curl to the URL).
+
+Webhooks are sent through a **Postgres-backed retry queue** (no Redis required). On failure the notification is retried with exponential backoff: 1m, 5m, 30m, 2h, 12h (each with ±20% jitter), giving up after 5 attempts. Delivery state is tracked on each hit's `notifications` array.
+
+# Configuration
+Source: https://docs.mantis.privacykey.org/configuration
+
+Required and optional environment variables for running Mantis.
+
+See `.env.example` in the main Mantis repo for the canonical, commented list.
+These are the variables operators usually need to understand.
+
+## Required
+
+- `DATABASE_URL` — Postgres connection string. Used directly when you run Mantis **from source** (`pnpm dev`, `pnpm db:migrate`) — point it at your own Postgres. The Docker Compose deploy **ignores** this value and derives its own from `POSTGRES_PASSWORD` (connecting to host `postgres`, not `localhost`), so a `localhost` value kept here for run-from-source does no harm.
+- `POSTGRES_PASSWORD` — password for the Docker Compose Postgres service, and the single source of truth from which Compose builds the app's `DATABASE_URL`. It ships **empty** in `.env.example` and has no insecure default: both Compose services abort on boot if it is unset or empty. Generate it (together with the pepper below) by running `./scripts/setup.sh` — a bare `cp .env.example .env` is not enough to start the stack. Not needed when running from source against your own Postgres.
+- `MANTIS_API_KEY_PEPPER` — server-side secret used as the HMAC key when hashing API keys at rest. Generate with `openssl rand -base64 32`. A leaked database alone is useless to an attacker without this value too. **Do not rotate after the first key is minted** — rotating invalidates every existing API key used by the CLI or API clients. If you must rotate, plan to re-mint and re-distribute every API key on the same maintenance window.
+
+  Upgrading from a pre-pepper deployment? Set the pepper once and existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 hashes too, and opportunistically re-hashes each row to the peppered form on next use. After a few weeks of normal traffic the legacy rows drain to zero.
+
+- `MANTIS_SECRET_KEY` *(optional)* — envelope-encryption key for operator secrets stored in the database: per-destination webhook HMAC signing secrets, the Apple Wallet auth secret, and the `.p12` certificate passphrase. When set, those columns are sealed at rest with AES-256-GCM (an `encv1:` envelope) so a database-only leak (backup, read replica) yields no usable secrets — the same trust model as the pepper above. Generate with `openssl rand -base64 32` (a 64-character hex string also works; it must decode to exactly 32 bytes). Leave it unset to keep plaintext-at-rest behavior. The feature is backward compatible: existing plaintext rows are read transparently, and once the key is set, new writes are encrypted while legacy rows migrate to ciphertext the next time a signing secret is rotated or the wallet config is re-saved. Don't rotate this key without re-saving those secrets, and don't remove it once rows are encrypted — reads of sealed values will then fail.
+
+## URLs
+
+- `PUBLIC_BASE_URL` — public origin used when Mantis generates trigger, status, and Wallet callback URLs. Defaults to `http://localhost:3000`.
+- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; if you choose a different path, put a reverse proxy in front that rewrites it to `/c/<id>` on the app.
+
+## Boot and runtime
+
+- `BOOTSTRAP_API_KEY` — pre-seed the first admin API key. If unset and no API keys exist, Mantis mints one and prints it on first boot.
+- `AUTO_MIGRATE=1` — apply pending migrations on app boot. Useful for long-running container deploys; avoid for Vercel/serverless.
+- `RUN_NOTIFY_WORKER=0|1` — notification worker switch. It runs by default outside Vercel; set `0` when using cron mode instead.
+- `CRON_SECRET` — required to enable `GET`/`POST /api/cron/notifications`. The endpoint fails closed with 401 when unset.
+- `LOG_LEVEL` — `trace|debug|info|warn|error`, default `info`.
+
+## Notification destinations
+
+- `SMTP_URL` — enables email notification destinations. Example: `smtp://user:pass@host:587`.
+- `SMTP_FROM` — email sender, default `Mantis <mantis@localhost>`.
+- `ALLOW_PRIVATE_WEBHOOKS=1` — allow webhook/Slack/Discord/Teams targets that resolve to private, loopback, link-local, or cloud-metadata IPs. Default is blocked as an SSRF guard.
+
+## Global notification destinations
+
+Beyond the per-key destinations managed with `mantis destinations`, an admin can
+set **instance-wide** destinations from the dashboard at `/settings/notifications`.
+Every key's hits fan out to its own destinations *plus* every global one, so you
+can set a Slack or webhook once and have every key you mint — including
+bulk-created ones — alert you without further setup. A destination listed both
+globally and on a key fires once (the key's own row wins, keeping its signing
+secret and activation history). There is no environment variable or CLI
+subcommand for the global set; it lives only in the admin dashboard.
+
+## Proxy and public-only hosts
+
+- `TRUST_PROXY_HEADERS=1` — trust `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, and `x-forwarded-for` for forensic IP logging. Set only behind a proxy that strips and re-injects those headers. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
+- `TRUSTED_IP_HEADER` — pin client-IP extraction to a single header (matched case-insensitively), e.g. `x-real-ip`. By default Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present; behind a non-Cloudflare proxy (nginx, Caddy, Traefik) that sets only `x-real-ip` and doesn't strip an inbound `cf-connecting-ip`, an attacker could forge `cf-connecting-ip` and have it trusted. Pin this to the one header your proxy authoritatively writes so all others are ignored. Only takes effect when `TRUST_PROXY_HEADERS` is on.
+- `TRUST_PROXY_HOPS` — number of trusted reverse-proxy hops in front of Mantis, default `1` (clamped to 1–16). Only affects `x-forwarded-for` parsing: the client IP is taken this many entries from the right of the chain (your nearest proxy appends the real peer on the right), so a client can't forge it past your proxy. Raise it only if you stack multiple trusted proxies; it has no effect on single-value headers like `cf-connecting-ip` or `x-real-ip`.
+- `FORCE_SECURE_COOKIES` — override the `Secure` flag on the dashboard session cookie. `1` forces it on, `0` forces it off; unset derives it from the request scheme (`X-Forwarded-Proto`, or the RFC 7239 `Forwarded` header's leftmost hop). Set `1` behind a proxy or tunnel that terminates real TLS but sets **neither** scheme header — otherwise the session cookie travels un-`Secure` over genuine HTTPS. Leave it unset for the proxies Mantis documents (Cloudflare, cloudflared, Tailscale, nginx), which all set a scheme header. Don't force it on over plain HTTP: the browser would then never send the cookie back and login would break.
+- `PUBLIC_ONLY_HOSTS` — comma/space-separated hostnames that should expose only public routes: trigger URLs, status URLs, and Wallet callbacks.
+- `DASHBOARD_HOSTS` — hostnames allowed to serve the dashboard and management API. When `PUBLIC_ONLY_HOSTS` is set, unknown hosts fail closed to public-only unless explicitly listed here.
+- `PUBLIC_ONLY_ALLOW_HEALTH=1` — allow `/api/health` on public-only hosts.
+- `PUBLIC_ONLY_ALLOW_INBOX=1` — allow `/inbox` and `/api/inbox` on public-only hosts. Use only for deliberate dev boxes.
+
+## Hit storage
+
+- `MANTIS_DUPLICATE_LOG_LIMIT` — duplicate hit rows to store per dedupe window after the first hit. Default `10`; `0` stores only the first hit in the window.
+- `MANTIS_MAX_STORED_REQUEST_FIELD_CHARS` — cap for stored `user-agent`, `referer`, and individual header values. Default `16384`.
+- `MANTIS_MAX_STORED_HEADER_SNAPSHOT_CHARS` — cap for the total stored header snapshot. Default `65536`.
+
+## Retention
+
+Unset retention variables mean retain forever. The notify worker sweeps hourly;
+cron mode runs the same sweep through `/api/cron/notifications`.
+
+- `MANTIS_HIT_RETENTION_DAYS` — delete hits older than N days; notifications cascade.
+- `MANTIS_NOTIFICATION_RETENTION_DAYS` — delete settled notifications older than N days.
+- `MANTIS_AUDIT_RETENTION_DAYS` — delete append-only audit events older than N days.
+- `MANTIS_SESSION_RETENTION_DAYS` — delete revoked or expired dashboard sessions older than N days. Active sessions are not affected.
+
+## Dev inbox
+
+- `ENABLE_DEV_INBOX=1` — enable the in-memory `/inbox` webhook capture and `/api/inbox` JSON API. The `/inbox/<slug>` capture endpoint is unauthenticated by design (so it can receive webhooks), but reading or clearing the buffer (`GET`/`DELETE /api/inbox`) requires an API key or dashboard session. Leave off in production.
+
+## Docker and tunnels
+
+- `MANTIS_BIND_HOST` — compose host bind address, default `127.0.0.1`.
+- `MANTIS_HOST_PORT` — compose host port, default `3000`.
+- `TS_AUTHKEY`, `TS_HOSTNAME`, `TS_PRIVATE_HOSTNAME`, `TS_PUBLIC_HOSTNAME`, `TS_EXTRA_ARGS` — Tailscale sidecar configuration.
+- `CLOUDFLARE_TUNNEL_TOKEN` — Cloudflare Tunnel sidecar token.
+
+## Apple Wallet
+
+Apple Wallet can be configured with env vars or from the admin dashboard at
+`/settings/wallet`. Env vars take precedence over the DB-stored dashboard config.
+
+Required to enable `.pkpass` generation:
+
+- `APPLE_PASS_CERT_PATH` — Pass Type ID `.p12` certificate.
+- `APPLE_PASS_CERT_PASS` — password for the `.p12`.
+- `APPLE_PASS_TEAM_ID` — 10-character Apple Team ID.
+- `APPLE_PASS_TYPE_ID` — Pass Type ID, for example `pass.com.example.mantis`.
+- `APPLE_PASS_AUTH_SECRET` — random secret used to derive per-pass Wallet auth tokens.
+
+Optional:
+
+- `APPLE_PASS_WWDR_PATH` — Apple WWDR intermediate PEM override. Mantis also bundles a WWDR cert.
+- `APPLE_PASS_ICON_PATH` — custom 58x58 PNG icon.
+- `APPLE_PASS_LOGO_PATH` — custom 160x50 PNG logo.
+- `APPLE_PASS_ORG_NAME` — pass organization name, default `Mantis`.
+- `APPLE_PASS_APNS_KEY_PATH` — APNs `.p8` auth key for pass-update pushes.
+- `APPLE_PASS_APNS_KEY_ID` — APNs key ID.
+- `APPLE_PASS_APNS_SANDBOX=1` — use APNs sandbox instead of production.
+
+# CLI reference
+Source: https://docs.mantis.privacykey.org/cli
+
+Every mantis CLI command and flag, verified against the v0.2.0 source.
+
+The `mantis` CLI is the primary way to work with a Mantis server (and with the
+stateless [edge worker](https://docs.mantis.privacykey.org/edge-deployment)). This page documents **every** command
+and flag in the CLI, transcribed from the v0.2.0 source. For the conceptual
+map — diagrams, mental model, common workflows — see `cli/COMMAND_MAP.md` in the
+app repo.
+
+New to the CLI? Run `mantis init` for guided, interactive setup, or `mantis`
+with no arguments for a context-aware welcome screen.
+
+> **Note**
+>
+> This reference covers CLI **v0.2.0**. Check yours with `mantis --version`, and
+> run `mantis doctor` after upgrading the server to confirm compatibility.
+
+## Global flags
+
+These can be combined with most commands. They're owned by the root `mantis`
+program, so they work the same everywhere.
+
+| Flag | Purpose |
+|---|---|
+| `--base-url <url>` | Override the stored base URL for this command (env: `MANTIS_BASE_URL`) |
+| `--key <key>` | Override the stored API key for this command (env: `MANTIS_API_KEY`) |
+| `-p, --profile <name>` | Use a named profile (env: `MANTIS_PROFILE`) |
+| `--json` | Emit machine-readable JSON to stdout (NDJSON for streaming commands like `hits --follow` and `watch`) |
+| `--output <mode>` | Output mode: `table`, `json`, or `wide` |
+| `-q, --quiet` | Suppress human-readable stdout |
+| `--no-headers` | Hide table headers |
+| `--color <when>` | When to colorize output: `auto`, `always`, `never` (env: `NO_COLOR`, `FORCE_COLOR`) |
+| `--debug` | Print stack traces + HTTP request details on failure (env: `MANTIS_DEBUG`) |
+| `--timeout <duration>` | Request timeout, e.g. `500ms`, `5s`, `1m` |
+| `--retries <n>` | Retry transient GET failures, `0`–`5` |
+| `-v, --version` | Print the CLI version |
+| `-h, --help` | Show help for any command |
+
+### Environment-only settings
+
+Three settings have no flag — they only exist as environment variables.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `MANTIS_ASCII` | (unset) | Set to any value to force plain-ASCII output. The CLI defaults to Unicode glyphs (`…` `·` `←` `🔐`) and already falls back to ASCII on `TERM=dumb` or a non-UTF-8 locale; this is the explicit opt-out for terminals that render them as mojibake anyway. |
+| `MANTIS_QUIET` | (unset) | Set to `1` to suppress the one-time keychain notice on stderr. Distinct from `-q, --quiet`, which suppresses human-readable **stdout** — this only silences that advisory. |
+| `MANTIS_BULK_CREATE_MAX_BYTES` | `67108864` (64 MiB) | Input-size cap for `mantis bulk-create`, guarding against a pathological CSV (a 10 GB file, or an unclosed quoted field) exhausting memory. Values below 1024, or anything non-integer, are ignored and the default applies. |
+
+### How a command picks its server
+
+Resolution happens when the command runs, in this order:
+
+1. **Ad-hoc** — `--base-url` + `--key` together talk to a one-off server, ignoring profiles.
+2. **`--profile <name>`** — use that named profile.
+3. **`MANTIS_PROFILE`** — same, from the environment.
+4. **Stored current profile** — the default when nothing else is set.
+
+The base URL comes from local config; the API key comes from the OS keychain.
+Generated artifacts (files, Home Assistant YAML, NFC URLs, host installers) embed
+a **literal trigger URL** at creation time — they don't consult CLI profiles when
+they later fire.
+
+> **Note**
+>
+> Any `<id>` argument accepts a full UUID, a unique prefix of at least four hex
+> characters, or the literal `last` (the most-recently-created key). Example:
+> `mantis hits last --follow`.
+
+---
+
+## Setup & authentication
+
+### `mantis init`
+
+Guided first-time setup — walks you through a server or edge configuration,
+interactive. No flags.
+
+### `mantis login`
+
+Store an API key for a profile, creating one if needed.
+
+| Flag | What it does |
+|---|---|
+| `-u, --url <url>` | Mantis server base URL (skips the prompt) |
+| `--key-stdin` | Read the API key from stdin instead of prompting (leak-free for CI) |
+| `--no-switch` | Save the profile but don't switch the current profile to it |
+
+### `mantis logout`
+
+Clear stored credentials for a profile (default: current).
+
+| Flag | What it does |
+|---|---|
+| `--all` | Clear all profiles and the config file |
+
+### `mantis whoami`
+
+Show the current profile: server, key prefix, Cloudflare Access state, and edge
+worker. No flags.
+
+### `mantis doctor`
+
+Check CLI config, server health, auth, and split public/private hosts.
+
+| Flag | What it does |
+|---|---|
+| `--public-url <url>` | Public trigger base URL to verify (auto-detected when a key exists) |
+
+### `mantis detect`
+
+Scan **this** machine for Mantis-style installer artifacts — a defensive,
+offline self-audit.
+
+| Flag | What it does |
+|---|---|
+| `--scope <scope>` | What locations to scan: `user` (default), `system`, or `all` |
+| `--verbose` | Include matched line text in the report |
+| `--deep` | Also walk `$HOME` for files containing `mantis` / `canarytokens.*` / `canary.tools` patterns (slow) |
+
+---
+
+## Profiles
+
+`mantis profile <subcommand>` — manage CLI profiles (multiple Mantis servers +
+edge workers).
+
+| Command | Flags |
+|---|---|
+| `profile list` (alias `ls`) | none |
+| `profile current` | none |
+| `profile use <name>` | none |
+| `profile show [name]` | none — defaults to the current profile |
+| `profile rm <name>` (alias `delete`) | `-y, --yes` (skip confirmation) |
+| `profile set-edge <name>` | `--worker <url>` (edge worker base URL), `--clear` (remove the linked worker) |
+
+`profile set-edge` links a default `mantis-edge` worker URL to a profile, which
+`mantis edge mint` then uses as its fallback worker.
+
+---
+
+## Cloudflare Access
+
+`mantis cloudflare <subcommand>` — manage Cloudflare Access auth for the Mantis
+API. See [Cloudflare deployment](https://docs.mantis.privacykey.org/deployment/cloudflare) for context.
+
+| Command | Flags |
+|---|---|
+| `cloudflare login` | `-a, --app <url>` — Access application URL (defaults to your Mantis base URL); opens a browser |
+| `cloudflare logout` | none |
+| `cloudflare set-service-auth` | `--client-id <id>` (ends in `.access`), `--client-secret <secret>`, `--client-secret-stdin` (read the secret from stdin, leak-free for CI) |
+| `cloudflare status` | none |
+
+`set-service-auth` configures a Service-Auth client-id + client-secret pair for
+headless CLI usage.
+
+---
+
+## Keys
+
+### `mantis new [memo]`
+
+Create a new key, and optionally generate bait artifacts and an installer in one
+shot. `[memo]` is a human-readable label.
+
+| Flag | What it does |
+|---|---|
+| `-N, --notify <spec>` | Destination as `<channel>:<target>`. Channels: `webhook`, `email`, `slack`, `discord`, `teams`, `home_assistant`. Repeatable. |
+| `-w, --notify-webhook <url>` | Shortcut for `--notify webhook:<url>`. Repeatable. |
+| `-e, --notify-email <email>` | Shortcut for `--notify email:<email>`. Repeatable. |
+| `-r, --response-kind <kind>` | Trigger response shape: `gif`, `empty`, `json`, `redirect`, `html` |
+| `--response-payload <json>` | Payload for `json`/`redirect`/`html` responses (JSON) |
+| `--expires-at <iso>` | ISO timestamp at which the key disables itself |
+| `--copy` | Copy the created key URL to the clipboard |
+| `--id-only` | Print only the created key UUID |
+| `--url-only` | Print only the created trigger URL |
+| `--qr <file>` | Write a PNG QR code of the key URL to this path |
+
+**Bait-file artifacts** (each writes a file containing the canary):
+
+| Flag | Format |
+|---|---|
+| `--docx <file>` | Word document |
+| `--xlsx <file>` | Excel spreadsheet |
+| `--pptx <file>` | PowerPoint |
+| `--pdf <file>` | PDF |
+| `--folder <file>` | Honey-directory `.zip` bundle (multiple bait files) |
+| `--svg <file>` | SVG that fires on browser render (Immich/PhotoPrism) |
+| `--html <file>` | HTML page that fires on browser open |
+| `--md <file>` | Markdown note that fires when rendered (Joplin/Trilium/Gitea) |
+| `--eml <file>` | `.eml` email that fires when opened in a mail client |
+| `--ics <file>` | Calendar event with an image-attachment URL |
+| `--vcf <file>` | Contact card with a PHOTO URI |
+
+**Installer chaining** (template a host snippet right after creation):
+
+| Flag | What it does |
+|---|---|
+| `--install <type>` | Generate an installer snippet for the new key (`shell`, `macos-login`, `css-background`, …). See [installer types](#installer-types). |
+| `--out <file>` | Write the installer snippet to this path (only with `--install`; default: stdout) |
+| `--ssh-only` | Wrap `shell`/`shell-sudo` installers in `if [[ -n $SSH_CONNECTION ]]; then … fi` |
+| `--hostname <host>` | Expected hostname (required for `--install js-clone-detector`) |
+
+Run `mantis new` with no arguments on a TTY to launch the interactive wizard.
+
+### `mantis bulk-create` (alias `import-csv`)
+
+Bulk-create keys from a CSV and write an output CSV with the generated URLs.
+
+| Flag | What it does |
+|---|---|
+| `--csv <file>` | Input CSV. **Required.** |
+| `-o, --out <file>` | Output CSV. **Required.** |
+| `--memo-column <name>` | Column to use as the memo |
+| `--memo-template <template>` | Memo template with `{{column}}` placeholders, e.g. `"{{area}} - {{device}}"` |
+| `-N, --notify <spec>` | Destination for every row as `<channel>:<target>`. Repeatable. |
+| `-w, --notify-webhook <url>` | Webhook destination for every row. Repeatable. |
+| `-e, --notify-email <email>` | Email destination for every row. Repeatable. |
+| `-r, --response-kind <kind>` | Default trigger response shape: `gif`, `empty`, `json`, `redirect`, `html` |
+| `--response-payload <json>` | Default payload for `json`/`redirect`/`html` responses |
+| `--expires-at <iso>` | Default ISO timestamp at which created keys disable themselves |
+| `--concurrency <n>` | Parallel create requests, `1`–`20` (default `4`) |
+| `--fail-fast` | Stop after the first row-level failure |
+| `--dry-run` | Validate rows and write the output CSV without creating keys |
+
+The input CSV is capped at **64 MiB**. Raise it with
+[`MANTIS_BULK_CREATE_MAX_BYTES`](#environment-only-settings) if you trust the
+file.
+
+**Per-row CSV columns.** The flags above set one value for *every* row. To vary a
+row from the rest, add these columns to the input CSV. `response_kind`,
+`response_payload`, and `expires_at` override the matching flag for that row only;
+the `notify` / `notify_<channel>` columns add their destinations *on top of* the
+`--notify` flags rather than replacing them:
+
+| Column | Effect |
+|---|---|
+| `memo` | The memo. If absent, falls back to an `area` then a `name` column (or use `--memo-column` / `--memo-template`). |
+| `notify` | One or more `<channel>:<target>` destinations for that row (`;`-separated), added on top of the `--notify` defaults. |
+| `notify_<channel>` | A per-channel column — `notify_webhook`, `notify_email`, `notify_slack`, `notify_discord`, `notify_teams`, `notify_home_assistant`; the cell is the target. |
+| `response_kind` | Per-row response shape, as the flag. |
+| `response_payload` | Per-row payload JSON, as the flag. |
+| `expires_at` | Per-row expiry, as the flag. |
+
+**Output columns.** The output CSV is your input with six columns appended
+(reused in place if a same-named column already exists, matched
+case-insensitively): `mantis_memo`, `mantis_id`, `mantis_public_id`,
+`mantis_url`, `mantis_created_at`, and `mantis_error` (populated per row on
+failure, so a partial run tells you exactly which rows didn't create).
+
+### `mantis list` (alias `ls`)
+
+List keys.
+
+| Flag | What it does |
+|---|---|
+| `-n, --limit <n>` | Max number of keys to fetch (default `50`) |
+| `-a, --all` | Fetch all pages |
+| `--id-only` | Print only key UUIDs |
+| `--url-only` | Print only trigger URLs |
+
+### `mantis show <id>`
+
+Show one key.
+
+| Flag | What it does |
+|---|---|
+| `--copy` | Copy the key URL to the clipboard |
+| `--qr-terminal` | Render the key URL as a QR code in the terminal |
+| `--id-only` | Print only the key UUID |
+| `--url-only` | Print only the trigger URL |
+
+### `mantis last`
+
+Print the id of the most-recently-created key. (Or pass `last` as the `<id>`
+argument on any command.) No flags.
+
+### `mantis open [id]`
+
+Open a key's dashboard page in the browser (or the dashboard root).
+
+| Flag | What it does |
+|---|---|
+| `--dashboard` | Always open the dashboard root, even if an id is supplied |
+| `--trigger` | Open the trigger URL instead of the dashboard page — **this fires the canary** |
+
+### `mantis disable <id...>`
+
+Disable one or more keys (preserves hit history). Accepts multiple ids. No flags.
+
+### `mantis enable <id...>`
+
+Re-enable one or more disabled keys. Accepts multiple ids. No flags.
+
+### `mantis rm <id...>` (alias `delete`)
+
+Delete one or more keys and cascade their hits. Accepts multiple ids.
+
+| Flag | What it does |
+|---|---|
+| `-y, --yes` | Skip confirmation (required on a non-TTY) |
+
+```bash
+# Bulk-delete everything
+mantis list --id-only | xargs mantis rm -y
+```
+
+---
+
+## Artifacts & installers
+
+### `mantis download <id>`
+
+Download generated bait files for an existing key. Each flag writes one file.
+
+| Flag | Format |
+|---|---|
+| `--docx <file>` | Word document |
+| `--xlsx <file>` | Excel spreadsheet |
+| `--pptx <file>` | PowerPoint |
+| `--pdf <file>` | PDF |
+| `--folder <file>` | Honey-directory `.zip` bundle |
+| `--nfc-label <file>` | Printable NFC sticker PDF (QR fallback) |
+| `--apple-wallet <file>` | Signed `.pkpass` Apple Wallet pass (requires `APPLE_PASS_*` env on server) |
+| `--svg <file>` | SVG image (Immich/PhotoPrism) |
+| `--html <file>` | HTML page |
+| `--md <file>` | Markdown note |
+| `--eml <file>` | `.eml` email message |
+| `--ics <file>` | Calendar event |
+| `--vcf <file>` | Contact card |
+| `--rtf <file>` | `.rtf` document — beacons on open like `.docx`, but plain text |
+| `--cookies <file>` | Netscape `cookies.txt` session jar |
+| `--bookmarks <file>` | Browser `bookmarks.html` export |
+| `--env <file>` | `.env` credentials file |
+| `--aws-credentials <file>` | `~/.aws/credentials` file |
+| `--netrc <file>` | `.netrc` (auto-read by curl/wget/git) |
+| `--kubeconfig <file>` | kubeconfig with a bait API server |
+| `--ovpn <file>` | OpenVPN profile |
+| `--rdp <file>` | Remote Desktop profile |
+
+The last eight are the credential/config-store bait formats: unlike the document
+formats above (`--rtf` included, which beacons on open like `.docx`), they fire
+when the URL inside is **used**, not when the file is opened. Save each under the name the real thing has (`cookies.txt`, `.netrc`,
+`~/.aws/credentials`, …) — see [file keys](https://docs.mantis.privacykey.org/file-keys#credential-and-config-stores).
+
+### `mantis install <id>`
+
+Generate a host-install or web-embed snippet for a key (built-in or
+plugin-provided type). See [Host events](https://docs.mantis.privacykey.org/host-events).
+
+| Flag | What it does |
+|---|---|
+| `-t, --type <type>` | Installer type (run `mantis install` with no `--type` to see the full list, including plugin types) |
+| `-o, --out <file>` | Write the snippet to a file (default: stdout) |
+| `-H, --hostname <host>` | Expected hostname (required for `js-clone-detector`; the snippet won't fire on this host or its subdomains) |
+| `--ssh-only` | Wrap `shell`/`shell-sudo` installers in `if [[ -n $SSH_CONNECTION ]]; then … fi` so they only fire for SSH-originated shells |
+
+#### Installer types
+
+| Type | Category | Fires when |
+|---|---|---|
+| `shell` | Host | Shell starts (useful for SSH-login detection) |
+| `shell-sudo` | Host | Wrapped `sudo` is invoked |
+| `macos-login` | Host | macOS user logs in |
+| `macos-boot` | Host | macOS boots |
+| `macos-wake` | Host | macOS wakes |
+| `macos-network` | Host | macOS network config changes |
+| `linux-boot` | Host | Linux boots |
+| `linux-wake` | Host | Linux resumes |
+| `linux-network` | Host | NetworkManager interface comes up |
+| `windows-logon` | Host | Windows user logon |
+| `windows-wake` | Host | Windows resumes |
+| `windows-network` | Host | Windows network profile connects |
+| `css-background` | Web | CSS background image is rendered |
+| `js-clone-detector` | Web | Page runs on an unexpected hostname |
+| `nfc-ndef` | Tag | NFC tag URL is opened |
+| `homeassistant` | Smart home | HA automation calls the generated `rest_command` |
+| `homeassistant-receiver` | Smart home | Ready-to-paste HA automation that listens on a Mantis webhook destination and reacts (drops the activation ping, example actions) |
+| `scrypted` | Smart home | Scrypted Script sees the selected device event |
+
+Plugins can register additional types; `mantis install` validates against the
+union of built-ins plus installed plugins.
+
+---
+
+## Device suites
+
+`mantis device <subcommand>` — mint and install the full set of host alarms for
+one machine in a single step. Where `mantis new --install` templates one alarm,
+a device suite mints **one key per vector** (shell login, sudo, wake, boot,
+network) for a named machine, so a hit tells you *which* alarm fired rather than
+just "something happened on web01". Each key is keyed idempotently by
+device-name + vector, so re-running for a rebuilt machine reuses its keys instead
+of minting a second set.
+
+### `mantis device profiles`
+
+List the vectors each OS profile would mint (and which need extra setup). No flags.
+
+### `mantis device new`
+
+Mint one key per host alarm for a machine.
+
+| Flag | What it does |
+|---|---|
+| `-o, --os <os>` | Target OS: `macos`, `linux`, `windows`, or `auto`. `auto` uses this machine's OS — only safe when you're on the target machine. |
+| `-n, --name <name>` | Machine these alarms are for; appears in every memo. Defaults to this host's name only with `--install`. |
+| `--vectors <list>` | Comma-separated alarm slugs (see `mantis device profiles`); defaults to the profile's recommended set. |
+| `--all` | Every alarm in the profile, including ones needing extra setup (e.g. macOS wake needs `sleepwatcher`). |
+| `--bundle <path>` | Write the install bundle (`.zip` of installers + a bootstrap script) to this path. |
+| `--install` | Apply the alarms to **this** machine now — touches LaunchAgents / systemd units / scheduled tasks, so it confirms first. |
+| `-y, --yes` | Skip the `--install` confirmation. |
+| `--dry-run` | Show what would be minted, and mint nothing. |
+
+`--bundle` is the reversible option — you read the script before running it;
+`--install` is the apply-now shortcut for the machine you're on.
+
+---
+
+## Hits & monitoring
+
+### `mantis hits <id>`
+
+Show recent hits for a key (filterable; `--follow` for a live tail).
+
+| Flag | What it does |
+|---|---|
+| `-n, --limit <n>` | Max hits to fetch (default `50`) |
+| `-v, --verbose` | Show full headers |
+| `--since <duration>` | Filter to hits within the last duration (e.g. `30s`, `5m`, `2h`, `1d`) or an ISO timestamp |
+| `--ip <addr>` | Filter to hits from this exact IP |
+| `--bot-only` | Only show hits flagged as bots |
+| `-f, --follow` | Stream new hits as they arrive (Ctrl-C to stop) |
+| `-i, --interval <seconds>` | Poll interval when `--follow` (default `3`) |
+
+### `mantis watch [id]`
+
+Poll for new hits and print them as they arrive — across all keys, or one.
+Omit `[id]` to watch all keys.
+
+| Flag | What it does |
+|---|---|
+| `-i, --interval <seconds>` | Poll interval in seconds (default `5`) |
+| `--id <id>` | **Deprecated** — watch a single key. Use the positional `[id]` instead. |
+
+### `mantis status [id]`
+
+Show monitor state across keys, or details for one (window mode: hits + expiry;
+latch mode: hits since reset). Omit `[id]` for a summary across all monitored keys.
+
+| Flag | What it does |
+|---|---|
+| `-n, --limit <n>` | Max hits to consider (default `50`) |
+| `-w, --watch` | Refresh continuously (default interval `5s`) |
+| `-i, --interval <seconds>` | Watch interval in seconds (used with `--watch`, default `5`) |
+| `--tripped-only` | Only show keys currently tripped (summary mode) |
+
+### `mantis monitor <id>`
+
+Configure the [Uptime Kuma](https://docs.mantis.privacykey.org/uptime-kuma) status endpoint for a key.
+
+| Flag | What it does |
+|---|---|
+| `-m, --mode <mode>` | Monitor mode: `off`, `latch`, or `window` |
+| `--window <seconds>` | Window size in seconds (used with `--mode window`) |
+
+### `mantis reset <id>`
+
+Reset a key's tripped monitor state (latch mode). No flags.
+
+---
+
+## Notifications
+
+`mantis destinations <subcommand>` (alias `dest`) — incrementally manage
+notification destinations on a key. Channels: `webhook`, `email`, `slack`,
+`discord`, `teams`, `home_assistant`.
+
+| Command | Flags |
+|---|---|
+| `destinations list <key-id>` (alias `ls`) | none |
+| `destinations add <key-id> [channel] [target]` | `--channel <channel>` (`webhook`/`email`/`slack`/`discord`/`teams`/`home_assistant`), `--target <target>` (URL or email) |
+| `destinations rm <key-id> <destination-id>` (alias `remove`) | none |
+| `destinations test <key-id>` | `-y, --yes` (skip the confirmation prompt) |
+| `destinations rotate-secret <key-id> <destination-id>` | `-y, --yes` (skip the confirmation prompt) |
+
+- `add` fires an activation ping when the destination is created.
+- `test` fires a synthetic hit on the key URL and reports which destinations succeeded.
+- `rotate-secret` rotates the HMAC signing secret on a webhook destination; the new secret is shown **once**.
+
+These subcommands manage destinations **on one key**. To route *every* key's
+hits to a shared destination without re-entering it each time, set an
+instance-wide destination in the dashboard at `/settings/notifications` (admin
+only) — see [global destinations](https://docs.mantis.privacykey.org/configuration#global-notification-destinations).
+There is no CLI subcommand for the global set.
+
+---
+
+## Audit log
+
+`mantis audit log` — list audit events, most recent first (admin keys only).
+
+| Flag | What it does |
+|---|---|
+| `-n, --limit <n>` | Page size, `1`–`500` (default `100`) |
+| `--since <duration>` | Only events within the last duration (e.g. `30s`, `5m`, `2h`, `1d`) or an ISO timestamp |
+| `-t, --type <event_type>` | Filter to one event type (e.g. `key.created`, `session.login`) |
+| `--actor <api_key_id>` | Filter to events caused by a specific API key id |
+
+---
+
+## Edge worker
+
+`mantis edge <subcommand>` — manage the stateless `mantis-edge` (Cloudflare
+Worker) key flow. See [Edge deployment](https://docs.mantis.privacykey.org/edge-deployment).
+
+### `mantis edge keygen`
+
+Generate a 32-byte AES key for an edge worker (prints to stdout). No flags.
+
+### `mantis edge deploy`
+
+Deploy the `mantis-edge` Worker (wraps `wrangler deploy`) and capture its URL.
+Runs the worker's own `wrangler` via `npx`, so no global install is needed.
+
+| Flag | What it does |
+|---|---|
+| `--dir <path>` | Worker directory to deploy from (defaults to `./` or `./mantis-edge`) |
+| `--set-key` | After a successful deploy, store the AES key locally for the deployed URL (prompts) |
+| `[wranglerArgs...]` | Extra args forwarded verbatim to `wrangler deploy` — put them after `--` |
+
+### `mantis edge set-key [worker] [key]`
+
+Store an edge AES key in the OS keychain for a given worker URL. `[worker]` is
+an alternative to `--worker`; `[key]` is a base64url-encoded 32-byte key
+(prompts for paste if omitted).
+
+| Flag | What it does |
+|---|---|
+| `--worker <url>` | Worker base URL (`https://…`) |
+| `--key-stdin` | Read the edge key from stdin instead of prompting (leak-free for CI) |
+
+There is intentionally no `--key` flag here — it would collide with the global
+`--key`. Use the positional argument, `--key-stdin`, or the prompt.
+
+### `mantis edge delete-key`
+
+Remove a stored edge key for a worker URL.
+
+| Flag | What it does |
+|---|---|
+| `--worker <url>` | Worker base URL |
+
+### `mantis edge mint`
+
+Mint a stateless edge URL — no server round-trip, pure local crypto. Run it bare
+on a TTY to launch the interactive wizard.
+
+| Flag | What it does |
+|---|---|
+| `--worker <url>` | Worker base URL (`https://…`); falls back to the current profile's edge worker |
+| `--webhook <url>` | Webhook URL the worker POSTs on hit |
+| `--channel <channel>` | Destination channel formatter: `webhook`, `slack`, `discord`, `teams` |
+| `--response-kind <kind>` | Trigger response shape: `gif`, `empty`, `json`, `redirect`, `html` |
+| `--response-payload <json>` | Payload for `json`/`redirect`/`html` responses (JSON) |
+| `--memo <text>` | Memo, forwarded to the webhook for context |
+| `--expires-at <iso>` | ISO timestamp after which the URL stops working |
+| `--edge-key <base64url>` | Override the stored AES key for one mint |
+| `--copy` | Copy the minted edge URL to the clipboard |
+| `--test` | Fire a synthetic GET to the minted URL and report what the worker says (verifies the chain end-to-end) |
+| `--install <type>` | After minting, generate an installer snippet for the URL |
+| `--out <file>` | Write the installer snippet to this path (only with `--install`) |
+| `--ssh-only` | Wrap `shell`/`shell-sudo` installers in `if [[ -n $SSH_CONNECTION ]]; then … fi` |
+| `--hostname <host>` | Expected hostname (required for `--install js-clone-detector`) |
+
+`--edge-key` is named separately from the global `--key` to avoid a collision.
+
+### `mantis edge device`
+
+The stateless counterpart to [`mantis device new`](#mantis-device-new): mint one
+edge URL per host alarm for a machine and write an install bundle **directory**,
+with no server and no database. Same vector model as `mantis device`, plus the
+edge minting flags.
+
+| Flag | What it does |
+|---|---|
+| `-o, --os <os>` | Target OS: `macos`, `linux`, `windows`, or `auto` |
+| `-n, --name <name>` | Machine these alarms are for; appears in every memo |
+| `--vectors <list>` | Comma-separated alarm slugs (see `mantis device profiles`); defaults to the recommended set |
+| `--all` | Every alarm in the profile, including ones needing extra setup |
+| `--bundle <dir>` | Write the install bundle to this **directory** (must not already have contents) |
+| `--install` | Apply the alarms to this machine now (asks first) |
+| `-y, --yes` | Skip the `--install` confirmation |
+| `--dry-run` | Show what would be minted, and mint nothing |
+| `--worker <url>` | Worker base URL (`https://…`); falls back to the current profile's edge worker |
+| `--webhook <url>` | Webhook URL the worker POSTs on hit — every minted URL embeds it |
+| `--channel <channel>` | Destination channel formatter: `webhook`, `slack`, `discord`, `teams` |
+| `--edge-key <base64url>` | Override the stored AES key for this mint |
+
+### `mantis edge install <url>`
+
+Generate an installer snippet for a stateless edge URL — the same snippets
+`mantis install` produces server-side, but for a minted edge URL. `<url>` is the
+URL printed by `mantis edge mint`.
+
+| Flag | What it does |
+|---|---|
+| `-t, --type <type>` | Installer type (see [installer types](#installer-types)) |
+| `-o, --out <file>` | Write the snippet to this path (default: print to stdout) |
+| `--ssh-only` | Wrap `shell`/`shell-sudo` installers in `if [[ -n $SSH_CONNECTION ]]; then … fi` |
+| `-H, --hostname <host>` | Expected hostname (required for `js-clone-detector`) |
+| `--memo <text>` | Memo to embed in the snippet header comment |
+
+---
+
+## Backup & restore
+
+`mantis backup` and `mantis restore` export and re-import your CLI profiles +
+plugin manifest as a passphrase-encrypted file. These have a dedicated guide
+with format details and automation examples — see
+[CLI backup & restore](https://docs.mantis.privacykey.org/cli-backup).
+
+### `mantis backup`
+
+| Flag | What it does |
+|---|---|
+| `-o, --out <file>` | Write the encrypted bundle to this path (default `./mantis-backup.json`) |
+| `--only <name>` | Back up only this profile instead of all of them |
+| `--passphrase-stdin` | Read the passphrase from stdin instead of prompting |
+| `--passphrase-env <var>` | Read the passphrase from the named environment variable |
+
+### `mantis restore <file>`
+
+`<file>` is a bundle produced by `mantis backup`.
+
+| Flag | What it does |
+|---|---|
+| `--overwrite` | Replace profiles that already exist on this machine (otherwise they're skipped) |
+| `--skip-plugins` | Don't re-install plugins from the manifest |
+| `--passphrase-stdin` | Read the passphrase from stdin instead of prompting |
+| `--passphrase-env <var>` | Read the passphrase from the named environment variable |
+
+---
+
+## Plugins
+
+`mantis plugin <subcommand>` — manage CLI plugins (third-party installer types +
+file formats; installed locally, never on the server).
+
+| Command | Flags |
+|---|---|
+| `plugin add <spec>` | none — `<spec>` is a GitHub ref (`owner/repo`, `owner/repo@v1.0.0`, `owner/repo@<sha>`) or a local directory |
+| `plugin list` (alias `ls`) | none |
+| `plugin remove <name>` (alias `rm`) | none |
+| `plugin upgrade <name>` | none — refresh from source; errors out if pinned to a commit SHA |
+
+---
+
+## Machine-wide config
+
+`mantis config <subcommand>` — get/set machine-wide CLI defaults (output mode,
+color). Stored defaults are applied **below** explicit flags.
+
+| Command | Flags / args |
+|---|---|
+| `config list` (alias `ls`) | none — show the config file path and current defaults |
+| `config get <key>` | `<key>` is `output` or `color` |
+| `config set <key> <value>` | `<key>` is `output` or `color`; `<value>` is `table`/`json`/`wide` (output) or `auto`/`always`/`never` (color) |
+| `config unset <key>` | `<key>` is `output` or `color` |
+| `config path` | none — print the config file path |
+
+---
+
+## Shell completion
+
+`mantis completion <shell>` — print a shell completion script. `<shell>` is
+`bash`, `zsh`, or `fish`.
+
+```bash
+# Zsh, for example
+mantis completion zsh > "${fpath[1]}/_mantis"
+```
+
+---
+
+## Related
+
+- [CLI backup & restore](https://docs.mantis.privacykey.org/cli-backup) — passphrase-encrypted profile + plugin export
+- [HTTP API](https://docs.mantis.privacykey.org/api) — the JSON API the CLI wraps
+- [Configuration](https://docs.mantis.privacykey.org/configuration) — server-side environment variables
+- [Updating](https://docs.mantis.privacykey.org/updating) — keeping the server, CLI, and edge worker in sync
+- [Host events](https://docs.mantis.privacykey.org/host-events) and [Edge deployment](https://docs.mantis.privacykey.org/edge-deployment) — what the installers and edge URLs do
+
+# CLI backup & restore
+Source: https://docs.mantis.privacykey.org/cli-backup
+
+Export all your CLI profiles and plugin manifest into a passphrase-encrypted file, then restore on another machine.
+
+The CLI's `config.json` is plain JSON and trivially copyable, but the secrets that actually make it work — `mantis_live_…` API keys, Cloudflare Service-Auth credentials, and edge-worker AES keys — live in the OS keychain and can't be `scp`'d. `mantis backup` and `mantis restore` cover the full set: every profile's config + secrets plus your installed-plugin manifest, packed into a single passphrase-encrypted JSON file.
+
+The resulting file is safe to commit to a private git-crypt repo, attach to a 1Password / Bitwarden / Doppler vault entry, or stash in iCloud / Drive. Lose the passphrase and the contents are unrecoverable, by design.
+
+## Migrating to a new machine
+
+```bash
+# On the old machine
+mantis backup --out ~/Vault/mantis-backup.json
+# Prompts for a passphrase twice.
+
+# On the new machine — install the CLI first
+brew install privacykey/tap/mantis
+mantis restore ~/Vault/mantis-backup.json
+# Prompts for the passphrase once. Restores config, every profile's
+# keychain entries, and re-installs plugins from their source.
+```
+
+## What's included
+
+| Item | Where it normally lives | In the bundle? |
+|---|---|---|
+| Profile metadata (base URL, key prefix, CF Access mode, edge worker URL) | `~/.config/mantis/config.json` | ✅ |
+| Active-profile pointer | `~/.config/mantis/config.json` | ✅ |
+| `mantis_live_…` API keys | OS keychain (`mantis-cli` service) | ✅ |
+| Cloudflare Access Service-Auth credentials | OS keychain (`mantis-cli-cf` service) | ✅ |
+| Edge AES keys | OS keychain (`mantis-cli-edge` service) | ✅ |
+| Plugin manifest (`name`, GitHub `owner/repo`, pinned commit SHA, version) | `~/.config/mantis/plugins.lock.json` | ✅ |
+| Plugin contents (the `~/.config/mantis/plugins/<name>/` tree) | Disk | ❌ — restored via `mantis plugin add <source>@<sha>` |
+| Local-path plugins (`mantis plugin add ./some/dir`) | Disk | ❌ — not reproducible on another machine; backup lists them as skipped |
+| `~/.cloudflared/` JWTs | Disk | ❌ — owned by the `cloudflared` binary, regenerated on next login |
+
+Plugins re-install from their original source, so the new machine needs network access to GitHub during `restore`. Use `--skip-plugins` if you want to defer that.
+
+## Format
+
+The bundle is plain JSON. Top-level fields are the encryption envelope; everything sensitive lives inside `ciphertextB64`.
+
+```json
+{
+  "format": "mantis-backup-v1",
+  "createdAt": "2026-05-15T09:30:00.000Z",
+  "encryption": {
+    "cipher": "AES-256-GCM",
+    "kdf": "scrypt",
+    "kdfParams": { "N": 32768, "r": 8, "p": 1 },
+    "saltB64": "…16 random bytes…",
+    "nonceB64": "…12 random bytes…"
+  },
+  "ciphertextB64": "…encrypted payload + GCM auth tag…"
+}
+```
+
+- **scrypt** (N=32768, r=8, p=1) — interactive-password parameters, ~64 MiB working set
+- **AES-256-GCM** — authenticated encryption; tampering with the file fails closed
+- **Random salt + nonce per backup** — two backups of identical data produce different ciphertexts
+- **Format tag** — checked on restore, so the CLI can evolve the format without silently breaking old bundles
+
+The file is written with mode `0600` (owner-only).
+
+## Flag reference
+
+### `mantis backup`
+
+| Flag | What it does |
+|---|---|
+| `-o, --out <file>` | Where to write the bundle. Default `./mantis-backup.json`. |
+| `--only <name>` | Back up just one profile. Default is all profiles. |
+| `--passphrase-stdin` | Read the passphrase from stdin instead of prompting (for scripts piping a vault into the CLI). |
+| `--passphrase-env <VAR>` | Read the passphrase from the named environment variable. |
+
+### `mantis restore`
+
+| Flag | What it does |
+|---|---|
+| `<file>` | Required. Path to the bundle produced by `mantis backup`. |
+| `--overwrite` | Replace profiles + keychain entries when names collide with profiles already on the target machine. Default: skip existing, print which were skipped. |
+| `--skip-plugins` | Don't re-install plugins from the manifest. You can run `mantis plugin add` manually later. |
+| `--passphrase-stdin` | Read the passphrase from stdin. |
+| `--passphrase-env <VAR>` | Read the passphrase from the named environment variable. |
+
+**Inline `--passphrase <value>` is intentionally not offered.** It would leak into shell history, `ps`, and CI logs. Use one of the stdin / env-var forms for automation.
+
+## Automation examples
+
+Pipe a passphrase from a password manager (1Password CLI shown):
+
+```bash
+op read "op://Personal/Mantis Backup/passphrase" \
+  | mantis backup --out ./mantis-backup.json --passphrase-stdin
+
+op read "op://Personal/Mantis Backup/passphrase" \
+  | mantis restore ./mantis-backup.json --passphrase-stdin
+```
+
+Restore via env var (avoids exposing the passphrase to other processes via stdin pipes):
+
+```bash
+export MANTIS_BACKUP_PASS="$(op read 'op://Personal/Mantis Backup/passphrase')"
+mantis restore ./mantis-backup.json --passphrase-env MANTIS_BACKUP_PASS
+unset MANTIS_BACKUP_PASS
+```
+
+Routine backup in cron / launchd, encrypted by a passphrase you've already burned into the env:
+
+```cron
+17 3 * * * MANTIS_BACKUP_PASS=$(cat /etc/mantis-passphrase) \
+  /opt/homebrew/bin/mantis backup \
+    --out /var/backups/mantis-$(date +\%F).json \
+    --passphrase-env MANTIS_BACKUP_PASS
+```
+
+## Security notes
+
+- The bundle is **only as strong as its passphrase**. scrypt slows down brute-forcing but does not eliminate it. Use a long, high-entropy passphrase (diceware-style, ≥ 5 words) if the file is going to live anywhere shared.
+- If the file leaks but the passphrase doesn't, contents stay confidential. If the passphrase leaks, contents are recoverable in seconds — rotate API keys (`mantis login` again) on every profile.
+- A wrong passphrase and a corrupted-/-tampered bundle are indistinguishable at the AES-GCM layer. The CLI reports "wrong passphrase or corrupted file" — both are real possibilities, in that order of likelihood.
+- The plugin re-install during `restore` runs `mantis plugin add <source>@<sha>`. If a plugin source repo has been deleted, transferred, or had its history rewritten since the original install, the re-install will fail (and is reported as a failed plugin, not a failed restore). The bundle does not carry the plugin code as a fallback.
+
+## When NOT to use this
+
+- **Sharing access with a teammate.** Send them a fine-grained API key from your Mantis server instead — backups carry every secret you own, not a scoped subset.
+- **Backing up the Mantis server data.** That's [`deployment/backups.md`](https://docs.mantis.privacykey.org/deployment/backups) — Postgres dumps of hits, audit log, wallet config, etc. `mantis backup` only covers your local CLI state.
+- **Synchronising two laptops in real time.** Use two profiles on each machine pointed at the same backend, and re-run `mantis login` on the second laptop. The backup file is a point-in-time snapshot, not a continuously-synced settings sync.
+
+## Related
+
+- [Getting started — step 4: set up two profiles for resilience](https://docs.mantis.privacykey.org/getting-started)
+- [Postgres backups (server side)](https://docs.mantis.privacykey.org/deployment/backups)
+- [Updating](https://docs.mantis.privacykey.org/updating)
+
+# Updating
+Source: https://docs.mantis.privacykey.org/updating
+
+Update commands for the server, CLI, edge worker, IoT helper, and host installers.
+
+Pick the row that matches how each component was installed. After bumping the server, run `mantis doctor` to confirm CLI/server compatibility.
+
+> **Warning**
+>
+> **One-time step when upgrading to ≥ v0.1.2:** the server now requires `MANTIS_API_KEY_PEPPER`, a base64 secret used as the HMAC key for hashing API keys at rest. Generate one with `openssl rand -base64 32` and set it in your `.env` (or your PaaS secret store) before redeploying. Existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 form and opportunistically upgrades each row on next use. Skip this step and the server will refuse to boot with a clear "Missing required env: MANTIS_API_KEY_PEPPER" message. See [Configuration → Required](https://docs.mantis.privacykey.org/configuration#required) for the full rationale.
+
+| Component | Install method | Update |
+|---|---|---|
+| **Server** | Docker (`docker compose up -d`) | `git pull && docker compose up -d --build` — `AUTO_MIGRATE=1` (set in `docker-compose.yml`) runs new migrations on container start. |
+| **Server** | Local dev (`pnpm run dev`) | `git pull && corepack enable && pnpm install && pnpm run db:migrate` — then restart `pnpm run dev`. |
+| **Server** | Railway / Render (Git-tracked) | `git push` to the tracked branch — both auto-redeploy. Migrations run on boot via `AUTO_MIGRATE=1`. |
+| **Server** | Fly.io launcher | `git pull && bash deploy/fly-launch.sh --app <name> --region <region>` — safely reuses the app/database and does not rotate the API-key pepper. If `fly.toml` is already configured, `git pull && fly deploy --app <name> --config fly.toml` is the shorter equivalent. |
+| **CLI** | Homebrew (`brew install privacykey/tap/mantis`) | `brew update && brew upgrade mantis`. |
+| **CLI** | Direct tarball from [releases](https://github.com/privacykey/mantis/releases?q=cli-v) | Download the new `mantis-<platform>.tar.gz`, extract, replace the binary on your `$PATH`. |
+| **Edge worker** | `mantis-edge/` via wrangler | `git pull && corepack enable && pnpm install && pnpm --filter @mantis/edge run deploy` — secrets (`MANTIS_EDGE_KEY`, `MANTIS_EDGE_WEBHOOK_ALLOWLIST`) persist across deploys, no re-keying needed. |
+| **IoT helper** | `iot-helper/` direct | `git pull && corepack enable && pnpm install && pnpm --filter @mantis/iot-helper run check` — then restart your `mantis-iot-helper.js` process. |
+| **Host installers** | Per-machine snippets from `mantis install …` | Existing snippets keep firing as long as the trigger URL hasn't changed — only re-run `mantis install <key-id> --type <type> --out <path>` when a release note flags a snippet-format change. |
+
+To get notified of new releases, **Watch → Custom → Releases** on the GitHub repo — `cli-v*` tags publish CLI binaries, plain `v*` tags publish server releases.
+
+# Changelog
+Source: https://docs.mantis.privacykey.org/changelog
+
+Published Mantis releases — CLI and server — what changed and where the full notes live.
+
+> **Note**
+>
+> This page mirrors [GitHub Releases](https://github.com/privacykey/mantis/releases) — `cli-v*` tags publish CLI
+> binaries, plain `v*` tags publish server releases. After updating, run `mantis doctor`
+> to confirm CLI/server compatibility, and see [Updating](https://docs.mantis.privacykey.org/updating) for the per-component
+> update commands.
+
+## CLI v0.2.0
+
+8 August 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.2.0)
+
+## CLI v0.1.6
+
+14 May 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.6)
+
+## CLI v0.1.5
+
+14 May 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.5)
+
+## CLI v0.1.4
+
+14 May 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.4)
+
+## CLI v0.1.3
+
+13 May 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.3)
+
+## CLI v0.1.2
+
+13 May 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.2)
+
+## CLI v0.1.0
+
+13 May 2026
+
+Cross-compiled standalone CLI binaries for macOS and Linux on arm64 / x86_64.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.1.0)
+
+# File keys
+Source: https://docs.mantis.privacykey.org/file-keys
+
+Generate bait files that fire a Mantis trigger when opened or rendered.
+
+Mantis can generate 22 server-backed artifacts, in two classes. Most are
+**document formats** that embed the key URL so the trigger fires when a viewer
+renders the file; NFC and Wallet artifacts fire through the platform action they
+are designed for. The **[credential and config stores](#credential-and-config-stores)**
+are different — they sit where an intruder who already has a shell goes looking,
+and fire when the URL inside them is *used*, not when the file is opened.
+
+| Format | Mechanism | Best in | Notes |
+|---|---|---|---|
+| `.docx` | External-image relationship in OOXML | Word, LibreOffice Writer | Most reliable — fires on render, also from email attachments after "Enable Editing" |
+| `.xlsx` | Same external-image trick, attached to a worksheet drawing | Excel, LibreOffice Calc | Identical reliability to DOCX |
+| `.pptx` | Same external-image trick on slide 1 | PowerPoint, Keynote (some), LibreOffice Impress | Same as above |
+| `.pdf` | **Combo**: `/OpenAction → /URI` + clickable `/Link` annotation | Adobe Reader, Foxit, most enterprise PDF readers | Less reliable — Chrome's PDFium viewer doesn't fire OpenAction; macOS Preview doesn't either. The clickable link covers the "user reads + clicks" case in those viewers. |
+| `.rtf` | `INCLUDEPICTURE` field referencing the trigger URL | Word, WordPad, TextEdit | Beacons on open like `.docx`, but as plain text it survives being opened in a text editor, and WordPad/TextEdit render it without the Protected-View banner `.docx` inherits from the Mark-of-the-Web. The `\d` switch re-fetches on every open, so a re-opened file fires again. |
+| `.zip` (`folder`) | Honey-directory bundle of 9 bait files | Shared drives, unpacked project folders | Each file in the extracted folder triggers the same key |
+| `.pdf` (`nfc-label`) | Printable QR/NFC sticker label | Physical tags, asset labels | The PDF does not fire by itself; the scan/tap opens the key URL |
+| `.pkpass` (`apple-wallet`) | Signed Apple Wallet pass with web-service callbacks | iPhone Wallet | Requires Wallet config; install, uninstall, and fetch callbacks record hits |
+| `.svg` | `<image href>` referencing the trigger URL | Browsers, some image viewers, photo libraries | Apps that raster-thumbnail may not fire on preview — opening the original always does |
+| `.html` | `<img src>` in a standalone page | Any browser, web-clip notes | Fires on first render |
+| `.md` | `![](URL)` image syntax | Joplin / Trilium / Logseq / Gitea README | Fires when the renderer loads images |
+| `.eml` | RFC 5322 message with HTML body `<img src>` | Thunderbird, Apple Mail, mail-archive previews | Fires on message render |
+| `.ics` | iCalendar event with `ATTACH;FMTTYPE=image/png` + `URL` | Apple Calendar, some CalDAV clients | Behavior varies by client |
+| `.vcf` | vCard 4.0 with `PHOTO;VALUE=URI` | macOS / iOS Contacts, CardDAV clients | Fires when the contact's avatar renders |
+
+## Credential and config stores
+
+The remaining eight formats are a different class of bait. Instead of beaconing
+when a viewer renders them, they carry the trigger URL in the slot a real file of
+that kind would — and fire when someone (or a tool they point at it) *uses* that
+URL. These are the files an intruder who already has a shell goes looking for,
+and the ones infostealer and forensic tooling greps by name, so a bait URL in one
+is found by exactly the person you want to catch. Every embedded secret is a
+documented example value (AWS's own `AKIAIOSFODNN7EXAMPLE`, Stripe's published
+test key) or generated nonsense, so nothing here is a live credential anywhere.
+
+Because the filename *is* the disguise, most of these keep the name the real thing
+has rather than taking the memo — a cookie jar named `payroll-laptop.txt` is not a
+cookie jar.
+
+| Format | Saved as | Fires when |
+|---|---|---|
+| `cookies` | `cookies.txt` | A stolen jar is replayed. The bait cookie is path-scoped to the canary, so curl / wget / yt-dlp or any "export cookies" tool that reloads it hits the URL exactly. |
+| `bookmarks` | `bookmarks.html` | The file is opened in a browser (the bait's `ICON_URI` is fetched on render) **or** the bait bookmark — an internal VPN portal / admin console — is clicked. |
+| `env` | `.env` | A tool reads the file and resolves `API_BASE_URL` against the canary. (`DEPLOY_WEBHOOK_URL` points at `/hooks/deploy` on the same host, which has no route — it is plausible filler, not a second trigger.) |
+| `aws-credentials` | `credentials` | The AWS CLI or an SDK is pointed at the profile — it honours the profile's `endpoint_url`, so calls resolve against the canary rather than AWS. |
+| `netrc` | `.netrc` | curl, wget, git or ftp authenticate to the canary host. `.netrc` is auto-consumed, so this fires without the file ever being opened. |
+| `kubeconfig` | `config` | Someone reads the file and curls the `server:` URL to see what cluster it is. (kubectl appends its own API paths and 404s, so a real `kubectl get pods` won't register — this catches the read.) |
+| `ovpn` | `<memo>.ovpn` | Someone follows the profile-update URL in the file. OpenVPN speaks its own protocol, so pointing the client at an HTTP canary won't fire — this is discovery bait, a weaker trigger than a document beacon, and the dashboard preset says so. |
+| `rdp` | `<memo>.rdp` | Someone follows the `workspacefeedurl` in the file. Like `.ovpn`, RDP won't beacon on its own; the hit comes when a human opens the URL. |
+
+See **[self-hosted apps](https://docs.mantis.privacykey.org/self-hosted-apps)** for per-app recipes (Immich, Paperless, Joplin, Vaultwarden, dashboards, code hosts, etc.).
+
+```bash
+# Create key + generate the formats supported directly by `mantis new`
+mantis new "Q4 forecast" \
+  -w http://localhost:3000/inbox/q4 \
+  --docx ./forecast.docx \
+  --xlsx ./forecast.xlsx \
+  --pptx ./forecast.pptx \
+  --pdf  ./forecast.pdf \
+  --svg  ./forecast.svg \
+  --html ./forecast.html \
+  --md   ./forecast.md \
+  --eml  ./forecast.eml \
+  --ics  ./forecast.ics \
+  --vcf  ./forecast.vcf \
+  --folder ./forecast-bundle.zip \
+  --qr ./forecast-qr.png
+
+# Download artifacts for an existing key, including Wallet/NFC formats
+mantis download <key-id> --docx ./out.docx
+mantis download <key-id> --pdf ./out.pdf
+mantis download <key-id> --nfc-label ./nfc-label.pdf
+mantis download <key-id> --apple-wallet ./mantis.pkpass
+
+# Credential/config-store bait — save under the real thing's name
+mantis download <key-id> --env ./.env
+mantis download <key-id> --netrc ./.netrc
+mantis download <key-id> --aws-credentials ./credentials
+
+# Dashboard: key detail page → "file keys" card has download links for all formats
+# API: GET /api/keys/<id>/download?format=docx|xlsx|pptx|pdf|folder|nfc-label|apple-wallet|svg|html|md|eml|ics|vcf|rtf|cookies|bookmarks|env|aws-credentials|netrc|kubeconfig|ovpn|rdp  (Bearer or session)
+```
+
+**Office reader caveats**:
+- ✅ Microsoft Office desktop apps — fetch external image on render (subject to **Protected View** for files marked "from internet"; first "Enable Editing" click triggers).
+- ✅ LibreOffice (Writer/Calc/Impress) — fetches external content by default.
+- ⚠ Office on the web / Office 365 in browser — depends on tenant policy.
+- ❌ macOS Quick Look — does not render external content.
+
+**PDF reader caveats**:
+- ✅ Adobe Acrobat Reader — follows `/OpenAction → /URI` (may show a one-time trust prompt for the host).
+- ✅ Foxit Reader, PDF-XChange — typically follows OpenAction.
+- ⚠ Chrome, Edge, Firefox built-in viewers — OpenAction not honored; mantis fires only if user clicks the visible "View the latest version online" link.
+- ❌ macOS Preview — OpenAction not honored; click-the-link fallback works.
+
+When you supply no body text, the document formats (`.docx`, `.xlsx`, `.pptx`,
+`.pdf`, `.html`, `.md`, `.eml`, `.rtf`) fall back to a built-in multi-paragraph
+internal-memo body that opens `CONFIDENTIAL — INTERNAL DISTRIBUTION ONLY`. It
+deliberately reads as a genuine document — an earlier default that described
+itself as placeholder text gave the canary away to the first person who opened
+it — so editing the file to look authentic afterwards is optional polish, not a
+required step. The credential/config stores carry their own fixed content and use
+neither the body nor the memo — except `bookmarks`, where the memo becomes the
+visible name of the bait bookmark, so give that key a memo that reads like a real
+bookmark rather than one that names it as a canary. The `.svg` / `.ics` / `.vcf` / NFC / Wallet formats
+have no multi-paragraph document body to fall back on either — instead they
+surface the key memo/title in their title, summary, name, or pass field, and
+`.ics` / `.vcf` route any body you do supply into the event `DESCRIPTION` /
+contact `NOTE` (falling back to that same title when you give none).
+
+The key memo and title flow into these artifacts (document properties, calendar/contact fields), so Mantis sanitizes them on generation: control bytes illegal in XML 1.0 are stripped from the Office / SVG / HTML formats, and a lone carriage return is normalized in the line-oriented `.ics` / `.vcf` formats — both so a memo carrying stray control characters can't produce a file that silently fails to open or that injects a forged property line.
+
+Apple Wallet artifacts require an Apple Developer Pass Type ID certificate. Set
+the `APPLE_PASS_*` env vars or configure `/settings/wallet` as an admin. If
+Wallet is not configured, `format=apple-wallet` returns `503 not_configured`.
+
+# Honey directory
+Source: https://docs.mantis.privacykey.org/honey-directory
+
+Create a ZIP bundle of bait files wired to the same Mantis key.
+
+A `.zip` bundle of pre-baited files, all wired to the same key. Drop the extracted folder on a shared drive; any file inside that gets opened, double-clicked, or `cat`'d fires the mantis.
+
+```bash
+mantis new "Q4 Leadership Plans" \
+  -w http://localhost:3000/inbox/folder \
+  --folder ./honey.zip
+
+# Or from the dashboard: key detail page → "honey directory (zip)" → ↓ folder.zip
+# Or API: GET /api/keys/<id>/download?format=folder
+```
+
+The unzipped folder contains 9 bait files, each independently triggering the same key:
+
+| File | Trigger when |
+|---|---|
+| `Q4 Salary Review.xlsx` | Opened in Excel / LibreOffice Calc |
+| `Restructuring Memo - Draft.docx` | Opened in Word / LibreOffice Writer |
+| `All-Hands Q4 Plans.pptx` | Opened in PowerPoint / LibreOffice Impress |
+| `Layoff Schedule 2026.pdf` | Opened in Adobe Reader (`/OpenAction`) or clicked link |
+| `passwords.txt` | Cat'd / read — has fake credentials + URL line at the bottom |
+| `database-credentials.txt` | Same pattern — fake DB creds + URL |
+| `README.txt` | Reading the directory's "what is this" file |
+| `Open in Browser.url` | Double-clicked on Windows (Internet Shortcut) |
+| `Latest Version.webloc` | Double-clicked on macOS (URL bookmark) |
+
+Note: this does **not** fire automatically when someone browses the folder in Finder/Explorer — that requires DNS infrastructure (a future stage). What it *does* give you is high-surface honeypot detection: a curious user spelunking the directory will open at least one of those files, and any of them triggers the alert.
+
+Fake credentials in `passwords.txt` / `database-credentials.txt` use AWS's and Stripe's documented example keys (`AKIAIOSFODNN7EXAMPLE`, `sk_live_4eC39HqLyjWDarjtT1zdp7dc`) — publicly known fakes, not real credentials anywhere.
+
+# Host-event keys
+Source: https://docs.mantis.privacykey.org/host-events
+
+Install host snippets that fire Mantis keys on shell, login, boot, wake, and network events.
+
+Want to know when *your own machine* boots, logs in, or starts a shell? Create a key, then install one of the generated snippets on the host you want to watch:
+
+| Type | Fires when | Platform |
+|---|---|---|
+| `shell` | Any shell starts (covers SSH logins) | POSIX (macOS, Linux) |
+| `shell-sudo` | You run `sudo` from a configured shell (captures the original command) | POSIX |
+| `macos-login` | You log in to the macOS desktop | macOS |
+| `macos-boot` | The Mac boots, before any user logs in | macOS (sudo required) |
+| `macos-wake` | Mac wakes from sleep | macOS (requires `brew install sleepwatcher`) |
+| `macos-network` | Network attaches / Wi-Fi joins / VPN connects | macOS |
+| `linux-boot` | systemd brings the network up | Linux (sudo required) |
+| `linux-wake` | System resumes from suspend / hibernate | Linux (sudo required) |
+| `linux-network` | NetworkManager brings an interface up | Linux (sudo required, NetworkManager) |
+| `windows-logon` | Any user logs on | Windows |
+| `windows-wake` | System resumes from sleep / hibernate | Windows |
+| `windows-network` | Network profile connects (Wi-Fi join, Ethernet, VPN) | Windows |
+| `nfc-ndef` | A phone taps an NFC tag and opens the URL | Blank NFC tag (NTAG213/215/216) |
+
+Get the installer for a key via:
+
+```bash
+# CLI — prints to stdout + install instructions to stderr
+mantis install <key-id> --type macos-login
+
+# Or write directly to a file:
+mantis install <key-id> --type macos-login --out ~/Library/LaunchAgents/com.mantis.login.plist
+
+# From the dashboard: key detail page → "install on a host" card → tab → copy/download
+# Or API: GET /api/keys/<id>/install?type=<type>  (cookie or Bearer auth)
+#         GET /api/keys/<id>/install?type=<type>&format=json  for metadata
+```
+
+The snippets are designed to be unobtrusive — backgrounded execution, 3–10s timeouts, output redirected to `/dev/null`. They won't slow your shell startup or hang your boot if the mantis server is unreachable.
+
+**Example: alert me on every SSH login**
+
+```bash
+# 1. Create the key
+mantis new "ssh login alert" -w https://my-webhook.example.com
+
+# 2. Generate + install the shell snippet
+mantis install <key-id> --type shell --out ~/.mantis.sh
+echo 'source ~/.mantis.sh' >> ~/.zshrc
+
+# 3. SSH in (or start any shell) — webhook fires.
+```
+
+**Example: alert me when my Mac boots**
+
+```bash
+mantis install <key-id> --type macos-boot --out com.mantis.boot.plist
+sudo mv com.mantis.boot.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.mantis.boot.plist
+sudo launchctl load /Library/LaunchDaemons/com.mantis.boot.plist
+```
+
+These keys behave identically to a normal HTTP key server-side — the difference is the install helpers that wire the trigger to host events. The same key can serve any installer type, so you can reuse one key for shell + login + boot if you don't want to discriminate.
+
+## Web-embed snippets (CSS / JS)
+
+In addition to host-event installers, the same `/install` endpoint generates two web-embed snippets you can paste into your own website:
+
+| Type | Fires when | Use case |
+|---|---|---|
+| `css-background` | The CSS is rendered anywhere (browser loads the URL as a background image) | Detect when someone copies your stylesheet to their own site. **Fires on your own site too** — distinguish by Referer header. |
+| `js-clone-detector` | The script runs on a hostname other than the expected one (or any subdomain of it) | Detect site cloning / phishing copies. Includes a runtime hostname check so it does **not** fire on your real site. |
+
+```bash
+# CSS embed
+mantis install <key-id> --type css-background --out ./mantis-canary.css
+
+# JS embed with hostname check
+mantis install <key-id> --type js-clone-detector --hostname example.com --out ./mantis.js
+```
+
+Both are also visible as tabs ("web CSS", "web JS") on the key detail page in the dashboard, with the JS tab exposing an inline hostname input field. The dashboard tab regenerates the snippet whenever you change the hostname.
+
+The CSS uses partial escape-sequence obfuscation on the URL (`\6c` for `l`, etc.) so the canary URL is less obvious to a casual reader of the stylesheet — browsers parse it identically.
+
+The JS snippet sends explicit `?l=<location>&r=<referrer>` query params alongside the canary URL so you can identify the cloning site even when the Referer header is stripped (strict referrer policies, mixed-protocol downgrades, etc.).
+
+## Physical snippets (NFC)
+
+The `/install` endpoint also generates an NFC URL record:
+
+| Type | Fires when | Use case |
+|---|---|---|
+| `nfc-ndef` | A phone taps a written NFC tag and opens the key URL | Server-room stickers, laptop lids, asset labels, network closet doors |
+
+```bash
+mantis install <key-id> --type nfc-ndef --out mantis-nfc-url.txt
+mantis download <key-id> --nfc-label mantis-nfc-label.pdf
+```
+
+Write the generated URL to a blank tag with any NFC writer app. Mantis appends
+`?src=nfc`, which the trigger endpoint promotes into `host_context.source = "nfc"`
+when the tag is tapped. The printable `nfc-label` PDF is a QR/sticker
+companion for the same key; it only fires when scanned or tapped, not when the
+PDF itself is opened.
+
+## Smart-home snippets (Home Assistant / Scrypted)
+
+The `/install` endpoint also generates smart-home snippets:
+
+| Type | Fires when | Use case |
+|---|---|---|
+| `homeassistant` | Any Home Assistant automation calls the generated `rest_command` | Door opened, lock unlocked, automation triggered, Scrypted sensor changed, Apple Home device bridged through HA |
+| `scrypted` | A Scrypted Script sees a selected device/interface event | Person/package/vehicle detection from Scrypted Smart Motion Sensor without routing through HA |
+
+```bash
+mantis install <key-id> --type homeassistant --out mantis-ha.yaml
+mantis install <key-id> --type scrypted --out mantis-scrypted.js
+```
+
+Use `--profile` on the `install` command to decide which server the generated
+snippet reports to. The snippet stores a literal URL, so changing the CLI's
+current profile later does not affect already-installed Home Assistant or
+Scrypted automations.
+
+### Drive an action when a hit fires
+
+The snippets above let Home Assistant *trigger* a mantis. The reverse also
+works: a `home_assistant` notification destination lets a hit *drive* HA — flip a
+switch, cut a VLAN, fire a scene, or push a phone notification. Point it at an HA
+webhook automation:
+
+```bash
+mantis dest add <key-id> home_assistant https://<your-ha>/api/webhook/<id>
+```
+
+Every hit then POSTs a `mantis.hit` JSON payload (memo, IP, user-agent, and the
+full `host_context`) to that webhook. The target URL must end in
+`/api/webhook/<id>`. To scaffold the HA side, generate a ready-to-paste
+automation skeleton — it listens on the webhook, drops the activation ping, and
+shows example actions (switch toggle, mobile push, logbook entry):
+
+```bash
+mantis install <key-id> --type homeassistant-receiver --out mantis-ha-receiver.yaml
+```
+
+If Mantis reaches HA over a private/Tailscale address, the SSRF guard blocks it
+unless you set `ALLOW_PRIVATE_WEBHOOKS=1` (an instance-wide switch — prefer
+restricting egress at the network layer).
+
+For devices that do not expose useful webhooks, [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) can watch LAN neighbor tables and log files, then fire the same Mantis URL for unexpected online/login events.
+
+## What information each installer captures
+
+Each installer sends `X-Mantis-*` headers alongside the hit, which the server parses into a structured `host_context` object exposed on the API + dashboard + CLI.
+
+| Header | Set by | Useful for |
+|---|---|---|
+| `X-Mantis-Source` | every installer or `?src=` helper | which installer fired (shell / shell-sudo / macos-login / macos-boot / macos-wake / macos-network / linux-boot / linux-wake / linux-network / windows-logon / windows-wake / windows-network / nfc / homeassistant / scrypted / iot-network / iot-log / wallet-installed / wallet-uninstalled / wallet-fetched) |
+| `X-Mantis-User` | `shell`, `shell-sudo`, `macos-login`, `macos-network`, `macos-wake`, `windows-logon`, `windows-wake`, `windows-network` | OS account |
+| `X-Mantis-Host` | every installer | which of your machines |
+| `X-Mantis-SSH-Client` | `shell`, `shell-sudo` (when SSH'd in) | **the SSH client's IP** |
+| `X-Mantis-SSH-Connection` | `shell`, `shell-sudo` (when SSH'd in) | full sshd connection tuple |
+| `X-Mantis-TTY` | `shell` | pty path; distinguishes interactive from scripted |
+| `X-Mantis-Sudo-Cmd` | `shell-sudo` | the args passed to sudo (e.g., `apt update --quiet`) |
+| `X-Mantis-Network-Interface` | `linux-network` | interface name (`wlan0`, `eth0`, etc.) |
+| `X-Mantis-Event` | Home Assistant / Scrypted / IoT helper | event label (`door-opened`, `person-detected`, `unexpected-online`, `device-login`) |
+| `X-Mantis-Device` | Home Assistant / Scrypted / IoT helper | friendly device name |
+| `X-Mantis-Entity-Id` | Home Assistant / Scrypted | entity/device id |
+| `X-Mantis-Automation` | Home Assistant | automation or scene name |
+| `X-Mantis-Area` | Home Assistant / Scrypted | room/area |
+| `X-Mantis-Iot-Mac` / `X-Mantis-Iot-Ip` | IoT helper | observed MAC/IP |
+
+(Boot-time installers don't include `X-Mantis-User` because no user is logged in yet.)
+
+The big win is `$SSH_CLIENT` — when someone SSHes into your machine and the shell snippet fires, the mantis records the **SSH client's IP**, not just the machine's own public IP. The dashboard surfaces this prominently as `← <client-ip>` next to the user/host context. The CLI shows the same:
+
+```
+$ mantis hits <key-id>
+when  ip   who                                              tag   notify
+1s    ::1  shell · root · @ prod-bastion · ← 203.0.113.42   curl  ✓1
+1s    ::1  shell · alice · @ alice-mbp                      curl  ✓1
+```
+
+Empty / missing X-Mantis headers (e.g., a non-SSH local shell, or a boot event with no user) are simply not displayed, so the chip stays compact.
+
+# Uptime Kuma integration
+Source: https://docs.mantis.privacykey.org/uptime-kuma
+
+Use Mantis status URLs with Uptime Kuma notification channels.
+
+Uptime Kuma integration lets you piggyback on [Uptime Kuma](https://github.com/louislam/uptime-kuma)'s 80+ notification integrations when you prefer status-monitor fan-out over mantis's built-in notification destinations.
+
+The mechanic: every key has a per-key *status URL* at `/status/<public_id>` that flips between OK (HTTP 200) and tripped (HTTP 503) when the mantis fires. Point a Uptime Kuma HTTP(s) monitor at that URL — Kuma detects the status code or body change and fires its configured notifications.
+
+## Modes
+
+| `monitor_mode` | When tripped | When does it clear? |
+|---|---|---|
+| `off` (default) | never (status URL returns 404) | — |
+| `latch` | once *any* hit recorded | manual reset via `POST /api/keys/<id>/reset` |
+| `window` | any hit within `monitor_window_seconds` (default 300) | automatically when the newest hit ages out |
+
+## Setup walkthrough
+
+```bash
+# 1. Pick a key and enable monitoring
+mantis monitor <key-id> --mode latch
+#   → status URL: http://mantis.example.com/status/<public_id>
+#   → current:    ok
+
+# 2. In Uptime Kuma → Add new monitor:
+#      Monitor type:        HTTP(s)
+#      URL:                 http://mantis.example.com/status/<public_id>
+#      Heartbeat Interval:  30s (or longer; Kuma minimum 20s)
+#      Status code accepted: 200
+#      → Save and attach your preferred notifications
+
+# 3. Test it: trigger the mantis URL
+curl http://mantis.example.com/c/<public_id>
+
+# Within 30s, Uptime Kuma sees the status URL flip 200 → 503,
+# and fires its configured Discord/Slack/Teams/whatever notifications.
+
+# 4. When you've acknowledged the alert:
+mantis reset <key-id>   # in latch mode; window mode auto-resets
+```
+
+## Status endpoint behavior
+
+| Key state | `GET /status/<public_id>` |
+|---|---|
+| Doesn't exist | `404` `{"error":"not_monitored"}` |
+| `monitor_mode = off` | `404` `{"error":"not_monitored"}` (same as nonexistent — no info leak) |
+| Disabled or expired | `404` `{"error":"not_monitored"}` (Uptime Kuma won't keep alerting on a key you've shut down) |
+| Active, no trip | `200` `{"status":"ok","mode":"latch"\|"window"}` |
+| Active, tripped | `503` `{"status":"tripped","tripped_at":"<iso>","mode":...}` |
+
+All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
+
+## Notes
+
+- Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — `/status/<public_id>` is a separate read-only reflection of state.
+- Uptime Kuma is optional. The status URL is plain HTTP(s); any monitor that watches for status-code or body changes (e.g., Pingdom, BetterUptime, healthchecks.io, your own cron) works.
+- In `latch` mode, switching to `off` then back to `latch` does not lose trip state — it's derived from `hits` filtered by `monitor_reset_at`.
+
+# Reliability
+Source: https://docs.mantis.privacykey.org/reliability
+
+Understand hit deduplication, notification retries, worker mode, and bot parsing.
+
+## Hit dedup
+
+Each key has a `dedupe_window_seconds` (default **60**). Repeat hits to the same key within that window are still recorded (so forensics are intact), but they are marked `is_duplicate: true` and don't fire notifications. Set to `0` to disable.
+
+## Trigger and Wallet flood guards
+
+Public trigger requests are rate-limited per IP (when a trusted client IP exists) and then per key, at 120/minute, by an in-memory limiter. Over-cap requests still return the key's normal response but skip the record-and-notify path, so one flooded canary can't blind another or drown your notifications — and a missing client IP fails open per-IP rather than collapsing every canary into one shared bucket. Apple Wallet callbacks (pass fetch, registration) share the trigger dedupe window plus a per-key/IP 60/minute cap, because a `.pkpass` embeds a long-lived auth token any holder could loop into a notification flood. These two guards use the per-process in-memory limiter; the cross-instance Postgres-backed limiter is reserved for auth/login throttling (see [operational notes](https://docs.mantis.privacykey.org/operational-notes)).
+
+## Notification retry queue
+
+On each hit, notifications are enqueued for that key's own destinations **plus** every instance-wide [global destination](https://docs.mantis.privacykey.org/configuration#global-notification-destinations) (`key_id IS NULL`, configured at `/settings/notifications`). A destination that appears in both sets is sent once, de-duplicated on `(channel, target)` with the key's own row winning so its signing secret and activation history are used — a key with no destinations of its own still alerts if a global one exists.
+
+Notifications are inserted into a `notifications` table on hit. A background worker claims pending rows (`FOR UPDATE SKIP LOCKED` — safe for multiple instances), attempts delivery with a 5s timeout, and on failure schedules the next attempt with exponential backoff. Status (`pending` / `in_flight` / `succeeded` / `failed` / `aborted`) is surfaced in the dashboard, CLI (`mantis hits <id>`), and API (`GET /api/keys/<id>/hits`).
+
+**Worker mode** (default for non-Vercel deployments):
+- `instrumentation.ts` starts the worker on boot. Disable with `RUN_NOTIFY_WORKER=0`.
+
+**Cron mode** (Vercel and other serverless):
+- Worker is skipped automatically when `VERCEL` env is set.
+- Configure Vercel Cron (or external scheduler) to hit `POST /api/cron/notifications` every minute.
+- Set `CRON_SECRET`; the endpoint requires `Authorization: Bearer $CRON_SECRET` and returns `401` when the secret is unset.
+
+```json
+// vercel.json
+{
+  "crons": [{ "path": "/api/cron/notifications", "schedule": "* * * * *" }]
+}
+```
+
+Both worker mode and cron mode run the same retention sweep. If
+`MANTIS_HIT_RETENTION_DAYS`, `MANTIS_NOTIFICATION_RETENTION_DAYS`,
+`MANTIS_AUDIT_RETENTION_DAYS`, or `MANTIS_SESSION_RETENTION_DAYS` are set,
+old rows are purged during the hourly worker loop or the cron invocation. The
+sweep additionally deletes expired `rate_limits` rows (window older than 1 day)
+on every run regardless of retention configuration, so the limiter table — whose
+keys embed attacker-rotatable IPs — can't grow without bound.
+
+## User-Agent + bot detection
+
+Hits are enriched with parsed UA (`ua_browser`, `ua_browser_version`, `ua_os`, `ua_device`) via `ua-parser-js`, plus a `bot_label` for known crawlers and HTTP clients (googlebot, curl, python-requests, headless-chrome, etc.). Bots aren't suppressed — they're labeled so you can decide.
+
+# Single-user by default
+Source: https://docs.mantis.privacykey.org/single-user
+
+How the default single-user operator model works in Mantis.
+
+Mantis is single-user out of the box. The first API key minted on a fresh
+deploy is automatically `is_admin = true` (the bootstrap path sets the flag).
+That key is the operator: it sees and manages every key on the instance.
+Additional API keys created later default to **non-admin** — they can only
+see and manage the keys they created themselves.
+
+If you only ever mint one API key for your deploy you'll never notice the
+distinction; the schema is shaped that way so it's easy to later promote a
+shared instance to multi-user. Until then, treat every operator as admin and
+keep your bootstrap key safe. Admin privileges are also required for the
+instance-wide audit log and Apple Wallet settings. The `audit log`
+(`mantis audit log`, admin-only) records create / update / delete / login /
+destination-secret / wallet-config events across the instance.
+
+## Key scope: a second axis
+
+`is_admin` is not the only authorization axis. Every API key also has a
+`scope` — `full` or `enroll` — set when it is minted (`POST /api/api-keys` body
+`{ scope }`, default `full`). A `full` key behaves as described above. An
+`enroll` key is **create-only**: it can call only `POST /api/keys`, and gets
+`403` on every other route — it cannot list keys, read hit history, read alert
+routing or signing secrets, or log in to the dashboard. The one thing it can
+read back is a key it can name: re-posting an `external_id` that already exists
+returns that key — trigger URL, memo, `public_id`, expiry — no matter which API
+key created it. So an enroll key is safe to embed on managed machines only to
+the extent your `external_id`s are hard to guess; `mantis device` derives them
+deterministically from the machine name. `is_admin` and `enroll`
+are mutually exclusive. See [key scope in the HTTP
+API](https://docs.mantis.privacykey.org/api#api-key-scope-full-vs-enroll).
+
+# Operational notes
+Source: https://docs.mantis.privacykey.org/operational-notes
+
+Implementation notes for key hashing, disabled-key behavior, and worker mode.
+
+- **API keys are stored as peppered HMAC-SHA-256 hashes.** Keys are random 192-bit keys with the `mantis_live_` prefix (matches GitHub's secret-scanning format, so a leaked key in a public repo will trigger their alerting). `MANTIS_API_KEY_PEPPER` is required for new mints; legacy pre-pepper SHA-256 rows are still accepted and are upgraded opportunistically on next use. Dashboard cookies carry opaque `mantis_sess_...` tokens; the database stores only a SHA-256 hash of each session token.
+- **Disabled or expired keys** still return the configured response — they just don't record a hit or fire notifications. This prevents an attacker from probing for valid key IDs by looking for differential responses.
+- **Notifications use a Postgres-backed queue.** Public trigger requests enqueue notification rows after the response path; a worker claims pending rows with `FOR UPDATE SKIP LOCKED`, sends them, and retries failures with backoff. The worker starts automatically on non-Vercel deployments. On Vercel or other serverless hosts, use `/api/cron/notifications` with `CRON_SECRET`.
+- **Operator secrets can be encrypted at rest.** Set `MANTIS_SECRET_KEY` (AES-256-GCM, `openssl rand -base64 32`) to envelope-encrypt webhook HMAC signing secrets and the Apple Wallet auth secret + cert passphrase in the database, so a DB-only leak yields no usable secrets. Unset = today's plaintext-at-rest behavior; existing rows are read transparently and migrate to ciphertext on the next rotate/re-save. See [Configuration](https://docs.mantis.privacykey.org/configuration#required).
+- **API-key auth failures are rate-limited.** Repeated failed bearer auth is throttled per client IP via a Postgres-backed fixed-window limiter (60/min) and returns `429` instead of `401` to blunt brute force; a successful auth never touches the limiter. The dashboard login action applies the same per-IP throttle to *failed* logins only (10/min), and only when a trusted client IP is available — so a flood of bad attempts can never lock out a valid key or the operator. The shared `rate_limits` table makes the cap hold across instances and serverless cold starts; the limiter fails open on a DB error.
+- **Alert payloads escape attacker-controlled values.** The hit IP, User-Agent, key memo, and the `host_context` parsed from `X-Mantis-*` headers are escaped before they're interpolated into Slack / Discord / Teams messages, so a canary tripper can't inject phishing links, channel mentions, or spoofed formatting into your alerts. The edge worker carries the same escapers and additionally drops the request query string from alert links.
+- **Outbound webhooks are SSRF-guarded.** Webhook / Slack / Discord / Teams deliveries enforce `http(s)`-only and refuse targets that resolve to RFC1918, loopback, link-local, or cloud-metadata (`169.254.169.254`) addresses, don't follow redirects, and re-validate the resolved address at connect time to close the DNS-rebinding window. Set `ALLOW_PRIVATE_WEBHOOKS=1` only when your webhook target is intentionally on the same LAN.
+
+# Dev inbox
+Source: https://docs.mantis.privacykey.org/dev-inbox
+
+Use the built-in local webhook capture while developing Mantis.
+
+A built-in webhook capture, only enabled with `ENABLE_DEV_INBOX=1`:
+
+- `ANY http://localhost:3000/inbox/<any-path>` — captures the request into a 100-entry in-memory ring buffer; request bodies over 1 MiB return `413 payload_too_large`, and stored/displayed bodies are truncated after 64 KiB
+- `GET /inbox` — live-updating viewer (polls every 1s, pretty-prints JSON bodies)
+- `GET /api/inbox` — same data as JSON; supports `?slug=foo&since=<id>`. Requires an API key or dashboard session.
+- `DELETE /api/inbox` — clear the buffer. Requires an API key or dashboard session.
+
+The `/inbox/<slug>` capture endpoint is unauthenticated by design so it can receive webhooks, but reading or clearing the captured buffer requires operator auth.
+
+Use it as your webhook target while developing, instead of webhook.site. State is in-memory only — it resets when the server restarts. Do not expose it in production.
+
+# Mantis canaries in self-hosted apps
+Source: https://docs.mantis.privacykey.org/self-hosted-apps
+
+Recipes for planting Mantis canaries in common self-hosted applications.
+
+How to plant a tripwire inside the self-hosted apps you already run. Every recipe assumes you have a Mantis instance running and a key minted (`mantis new "memo"`). The `URL` referenced below is the per-key trigger URL printed by `mantis new`.
+
+Three flavours of recipe:
+
+1. **Drop-a-file** — generate an artifact with `mantis new --<fmt>` or `mantis download <id> --<fmt>` and upload it. The app stores the bytes; later, when anyone views/opens the file, an embedded reference fetches the trigger URL.
+2. **Paste-a-URL** — no new artifact needed. You put the trigger URL into a field the app will hit on your behalf (a credential, a webhook, a dashboard tile, etc.).
+3. **Platform artifact** — Wallet and NFC artifacts depend on the platform action: a pass install/fetch/remove, or a phone scan/tap.
+
+| | Format | What fires the canary |
+| -- | --- | --- |
+| `--docx` `--xlsx` `--pptx` | Office | Auto-fetch of external image when the doc is opened in Word/Excel/PowerPoint |
+| `--pdf` | PDF | `/OpenAction → /URI` on open + clickable link + visible URL |
+| `--folder` | ZIP of all of the above + .url/.webloc shortcuts | Honey-directory: every file in the bundle fires the same key |
+| `download --nfc-label` | PDF label | Printed QR fallback for an NFC tag; scan/tap opens the key URL |
+| `download --apple-wallet` | `.pkpass` | Wallet web-service callbacks record install, uninstall, and fetch events |
+| `--svg` | SVG | Browser/viewer renders `<image href=…>` |
+| `--html` | HTML | Browser fetches `<img src=…>` |
+| `--md` | Markdown | Note renderer fetches `![](…)` image |
+| `--eml` | RFC 5322 email | Mail client renders HTML body `<img>` |
+| `--ics` | iCalendar event | Some calendar clients fetch `ATTACH;FMTTYPE=image/*` |
+| `--vcf` | vCard | CardDAV clients fetch `PHOTO;VALUE=URI` |
+
+---
+
+## Photo libraries — Immich, PhotoPrism, Lychee, LibrePhotos
+
+```sh
+mantis new "vacation 2024 — RAW" --svg /tmp/vacation.svg
+```
+
+Upload `vacation.svg` to your photo library. Caveats per app:
+
+- **Immich**: SVG uploads land in the library, but Immich generates a server-side raster thumbnail by default — the thumbnail does not fire. Opening the original (link or "Open original") fires every time. Useful for detecting download-and-view, not gallery scrolling.
+- **PhotoPrism / Lychee**: similar — SVG previews depend on the app's preview pipeline; verify with `mantis hits <id>` after a single render.
+
+For a passive scraper signal (much weaker) you can also place a JPEG whose EXIF `UserComment` contains the trigger URL; this only fires if someone runs `exiftool` on the file.
+
+## Document management — Paperless-ngx, Mayan EDMS
+
+```sh
+mantis new "Q4 financials — final" --pdf /tmp/q4.pdf
+mantis new "Archived inbox" --eml /tmp/archive.eml
+```
+
+Upload `q4.pdf` to Paperless. Paperless OCRs the document but does not auto-fire the canary during indexing. When you (or anyone) clicks the document in the UI to preview it, the browser PDF viewer hits the trigger URL on open. The clickable URL annotation and `/OpenAction` both fire.
+
+EML is useful for email-archive workflows. Paperless can ingest .eml; opening the message preview fires the inline `<img>`.
+
+## Notes — Joplin, Trilium, Logseq, Obsidian sync
+
+```sh
+mantis new "API keys backup" --md /tmp/note.md
+mantis new "Server passwords" --html /tmp/note.html
+```
+
+Import the Markdown file as a new note. The first time the note opens (or every time, depending on the renderer), the inline image renders and fires.
+
+Trilium and Logseq render Markdown server-side or on-render — both work. Obsidian renders Markdown in the desktop client; the inline image fires from your editor when the note is opened.
+
+## Calendar — Radicale, Nextcloud Calendar, DAViCal
+
+```sh
+mantis new "Quarterly Review — leadership" --ics /tmp/event.ics
+```
+
+Import `event.ics` into your calendar app. Apple Calendar and macOS Calendar fetch attachments with `FMTTYPE=image/*` on open; behavior varies for other clients. The `URL` property is also clickable from the event detail.
+
+## Contacts — Radicale, Nextcloud Contacts, CardDAV
+
+```sh
+mantis new "Backup admin contact" --vcf /tmp/contact.vcf
+```
+
+Import the vCard. CardDAV clients (macOS Contacts, iOS Contacts, Thunderbird Address Book) fetch the `PHOTO;VALUE=URI` reference on contact render. The `URL` field is also surfaced as the contact's URL property.
+
+## Password vaults — Vaultwarden, Bitwarden, Padloc
+
+No new artifact needed. Create a login entry:
+
+- **Name**: `Internal admin — DO NOT TOUCH`
+- **URL**: paste your Mantis trigger URL (e.g. `https://mantis.example.com/c/abc123`)
+- **Username**: `admin`
+- **Password**: anything random
+
+Bitwarden's "Launch & autofill" hits the URL. The browser extension's icon-click also fires. Manual reveal does **not** fire — only when the URL is followed.
+
+## Dashboards — Heimdall, Homer, Homepage, Dashy
+
+No new artifact needed. Add a tile:
+
+- **Label**: `Internal Wiki` / `Admin Console` / `Backup Portal`
+- **URL**: trigger URL
+
+If anyone clicks the tile, the canary fires. Doubles as a phishing-resistance training tool for housemates.
+
+## Bookmarks — Linkding, Wallabag, Hoarder, Karakeep, Shiori
+
+No new artifact needed. Paste the trigger URL as a bookmark. Most of these services scrape the URL on add to extract metadata, so the canary fires immediately on save (one expected hit). Re-fetches or re-syncs also fire — this signal is noisy. Best for detecting force-rescan attacks rather than per-view activity.
+
+## Home automation — Home Assistant, n8n, Node-RED
+
+No new artifact needed. Add a `webhook` integration / node:
+
+- **URL**: trigger URL
+- Wire it into an automation that *should never run* (e.g., guarded behind a condition that's always false).
+
+A misconfiguration, manual test, or attacker-modified config will fire the canary.
+
+## Code hosting — Gitea, Forgejo, Gogs
+
+```sh
+mantis new "Private repo README" --md /tmp/README.md
+```
+
+Drop the generated `README.md` into a fresh private repo. Anyone with read access loads the README and fires the canary. Useful for detecting unauthorised clone-and-browse.
+
+For a separate vector inside the same repo, you can also add a fake `.env` whose first line is the trigger URL. Exfiltrators scanning for secrets often follow URLs in `.env` files.
+
+## RSS / social — FreshRSS, Miniflux, Mastodon, Pixelfed
+
+No new artifact needed. Publish a status or feed item containing the trigger URL. Federating instances and aggregators fetch OpenGraph metadata from the URL → the canary fires every scrape. This is a federation/scraper detector, not a user-clicked detector.
+
+## Cloud storage — Nextcloud, Seafile, OwnCloud
+
+Any of the artifacts above work — drop into a folder and grant a share link. The recipe is the same as the file-format's intended consumer: the .pdf fires when previewed in the browser's PDF viewer; the .eml fires when previewed in Nextcloud Mail; the .vcf fires when imported into Contacts; etc.
+
+For a single-file high-fidelity option, use `mantis new "Confidential" --folder /tmp/honey.zip` — the unzipped folder contains a coordinated set of bait files that all fire the same key.
+
+## Mail servers — Mailcow, Mail-in-a-Box, Stalwart
+
+```sh
+mantis new "Archived support email" --eml /tmp/junk.eml
+```
+
+Place the .eml into an archive or junk folder. Any mail client opening the message renders the HTML body and fires.
+
+## Verification
+
+After dropping a recipe, confirm it landed:
+
+```sh
+mantis hits <key-id>
+```
+
+The hit's `user_agent` field tells you which renderer fired (browser? mail client? CalDAV?), useful for narrowing down where the access happened.
+
+For broader coverage, set the key's monitor mode to `latch` so the next view trips an Uptime Kuma alert:
+
+```sh
+mantis monitor <key-id> --mode latch
+```
+
+See the Uptime Kuma section of the main README for the rest of that flow.
+
+---
+
+## Edge compatibility
+
+Mantis has two URL-emitting modes:
+
+| Mode | URL shape | Backing | Per-hit storage |
+|---|---|---|---|
+| **Server-backed** (`mantis new`) | `https://mantis.example.com/c/abc123` (~40 chars) | Postgres-backed Next.js server | Yes — full hit log, dashboard, monitor modes, retry queue |
+| **mantis-edge** (`mantis edge mint`) | `https://worker.example.com/c/<sealed-blob>` (~150–400 chars) | Cloudflare Worker, AES-GCM-sealed config in the URL itself | No — fires the configured webhook once, no local state |
+
+Every artifact below is a URL container, but Wallet has one server-backed-only
+advantage: Apple Wallet web-service callbacks need the stateful server to record
+install/uninstall/fetch events. Pick the mode first, get a URL, then drop it
+into the format.
+
+### Compatibility matrix
+
+| Format | Server-backed | mantis-edge | Notes |
+|---|---|---|---|
+| `.docx` `.xlsx` `.pptx` | ✅ | ✅ | OOXML `relationships/External` URL — length doesn't matter |
+| `.pdf` | ✅ | ✅ | `/OpenAction → /URI` accepts any URL; long URLs may wrap when displayed but still open |
+| `.folder` (zip) | ✅ | ✅ | All bundled bait files inherit the same URL |
+| `.svg` | ✅ | ✅ | `<image href>` accepts any URL |
+| `.html` | ✅ | ✅ | `<img src>` accepts any URL |
+| `.md` | ✅ | ✅ | `![](URL)` Markdown image syntax has no length limit |
+| `.eml` | ✅ | ✅ | RFC 5322 has no `<img src>` URL length cap; very long URLs may trip overzealous spam filters |
+| `.ics` | ✅ | ⚠ | RFC 5545 §3.1 says lines SHOULD fold at 75 octets. Our generator doesn't fold — long edge URLs may upset strict parsers (most tolerate it). Test in your CalDAV client before deploying. |
+| `.vcf` | ✅ | ⚠ | RFC 6350 §3.2 same folding rule. Same caveat. |
+| `.nfc-label` (PDF/QR sticker) | ✅ | ✅ | QR error correction at "M" comfortably encodes up to ~500 chars; edge URLs at ~300 chars still scan reliably |
+| `.apple-wallet` (.pkpass) | ✅ | ⚠ | Apple Wallet's web-service callbacks require the server-backed key for registration/de-registration/fetch callbacks — edge-only use loses lifecycle tracking |
+| QR via `--qr` | ✅ | ✅ | Same QR comment as above |
+
+### Trade-offs
+
+**Use server-backed when you want:**
+- A hit log you can query (`mantis hits`, dashboard, `/api/keys/<id>/hits`)
+- Uptime Kuma monitor mode (latch/window)
+- Webhook retry queue + delivery state on each hit
+- Compact URLs (small QR codes, clean-looking VCF/ICS, fitting in tight UI fields)
+
+**Use mantis-edge when you want:**
+- Zero server attack surface (no DB, no API, no auth to compromise)
+- Sub-50ms response from Cloudflare's edge globally
+- A canary that survives even if your main mantis server is down
+- One-shot fire-and-forget: you don't care to query past hits, just want a webhook on access
+
+**Combine them** by minting two URLs (one of each) for the same artifact — e.g. `mantis new "Q4" --pdf q4.pdf` plus a separately-minted edge URL pasted into the PDF body — and you get both a live audit trail and a degradation-proof tripwire.
+
+---
+
+## Format standards reference
+
+Every artifact Mantis generates follows a published spec, so any compliant consumer renders it correctly:
+
+| Format | Spec | Embed mechanism |
+|---|---|---|
+| `.docx` | ECMA-376 / **ISO/IEC 29500-1:2016** (Office Open XML, WordprocessingML) | `word/_rels/document.xml.rels` Relationship `Target="..." TargetMode="External"` pointing at canary URL, referenced by a `w:drawing` |
+| `.xlsx` | ECMA-376 / ISO/IEC 29500-1 (SpreadsheetML) | `xl/drawings/_rels/drawing1.xml.rels` external Relationship |
+| `.pptx` | ECMA-376 / ISO/IEC 29500-1 (PresentationML) | `ppt/slides/_rels/slide1.xml.rels` external Relationship |
+| `.pdf` | **ISO 32000-1:2008** / 32000-2:2020 | `/Catalog → /OpenAction → /Action /URI` + `/Annot /Link /URI` |
+| `.folder` (zip) | **ISO/IEC 21320-1:2015** (subset of PKWARE APPNOTE.TXT) | Container only — payload is the bundled formats |
+| `.svg` | **W3C SVG 1.1 (Second Edition)** / SVG 2 | `<image href="...">` (SVG 2) + `xlink:href` (SVG 1.1 back-compat) |
+| `.html` | **WHATWG HTML Living Standard** | `<img src="...">` |
+| `.md` | **CommonMark 0.31.2** (most renderers) — some use GFM (GitHub Flavored Markdown) | `![alt](url)` image syntax |
+| `.eml` | **RFC 5322** (Internet Message Format) + **RFC 2045–2049** (MIME) | `multipart/alternative` with `text/html` part containing `<img src="...">` |
+| `.ics` | **RFC 5545** (iCalendar Core Object Specification) + RFC 5546 (transport) | `VEVENT` with `URL:<canary>` and `ATTACH;FMTTYPE=image/png:<canary>` |
+| `.vcf` | **RFC 6350** (vCard 4.0) | `PHOTO;VALUE=URI:<canary>` and `URL:<canary>` |
+| `.nfc-label` | ISO 32000 (PDF) + **ISO/IEC 18004:2015** (QR Code 2005) | Printable PDF label with QR fallback; pair with `nfc-ndef` when writing an NFC tag |
+| `.apple-wallet` | Apple **PassKit Package Format** (proprietary, no ISO equivalent) | Web-service URL in `pass.json` → callbacks fire on install, uninstall, and fetch |
+| `.pkpass` QR `--qr` | **ISO/IEC 18004:2015** (QR Code) | Direct URL encoding, error correction level "M" |
+| Trigger 1×1 GIF | **CompuServe GIF89a** | Default response body for `/c/<id>` on a server-backed key |
+
+### Why this matters for self-hosted apps
+
+App ecosystems treat their input formats as **black boxes that conform to a spec**. Immich doesn't know your SVG was generated by Mantis — it just sees a W3C-conformant SVG with an `<image href>`. Paperless doesn't know your PDF embeds a tripwire — it sees an ISO 32000 PDF with an OpenAction. The standards layer is what makes a Mantis canary indistinguishable from a "real" file at the format level.
+
+The only fingerprint is the URL itself. For maximum stealth:
+
+- Use a custom domain for your server (`assets.your-company.com/c/<id>` looks innocuous; `mantis.example.com/c/<id>` does not)
+- Or use mantis-edge with a domain like `cdn.your-company.com` — the URL still reveals the path `/c/<blob>`, but the host stays neutral
+- The `MANTIS_PUBLIC_PATH` env var (default `/c`) lets server-backed mode use stealthier paths like `/img`, `/track`, `/r`
+
+# Project layout
+Source: https://docs.mantis.privacykey.org/architecture
+
+Directory map of the Mantis source tree and major application modules.
+
+```
+src/                         # Next.js server: dashboard, API, public triggers
+  app/
+    page.tsx                 # / redirects to /keys or /login
+    login/                   # API-key login form; mints httpOnly sessions
+    logout/                  # POST clears the session cookie
+    (app)/                   # authenticated dashboard route group
+      layout.tsx             # shared nav: keys, new, admin-only wallet settings
+      keys/
+        page.tsx             # key list, enable/disable controls
+        new/                 # create form
+        [id]/                # detail, hits, downloads, installers, destinations
+      settings/wallet/       # admin Apple Wallet / PassKit config
+      settings/notifications/ # admin instance-wide (global) notify destinations
+    api/
+      keys/...               # authenticated key CRUD, hits, downloads, installers
+      api-keys/...           # authenticated API-key listing, minting, revocation
+      hits/recent/           # CLI watch feed across accessible keys
+      audit/                 # admin audit log
+      health/                # liveness + DB readiness
+      cron/notifications/    # serverless notification/retention worker endpoint
+      inbox/                 # dev inbox JSON API
+      wallet/v1/...          # Apple Wallet web-service callbacks
+    c/[publicId]/            # public trigger endpoint
+    status/[publicId]/       # public monitor endpoint for Uptime Kuma
+    inbox/                   # dev webhook capture + viewer
+  db/                        # Drizzle schema and SQL migrations
+  lib/
+    auth.ts                  # Bearer API key auth + per-IP auth-failure throttle
+    session.ts               # dashboard session cookies backed by hashed tokens
+    env.ts                   # URL, SMTP, bootstrap, and Wallet env resolution
+    keys.ts                  # public ID and API serialization helpers
+    response.ts              # gif / empty / json / redirect / html trigger output
+    secret-box.ts            # AES-256-GCM envelope encryption of operator secrets
+    rate-limit.ts            # Postgres-backed + in-memory fixed-window limiters
+    hits.ts                  # shared hit-recording / dedupe-window decision
+    ssrf.ts                  # private/metadata-IP + DNS-rebinding webhook guard
+    docs/                    # generated bait artifacts: Office, PDF, Wallet, NFC, etc.
+    installers/              # host, web, IoT, NFC, and Wallet installer generation
+    notify/                  # destinations, activation pings, queue, sender worker
+    monitor.ts               # latch/window status logic
+    request-info.ts          # trusted client IP extraction + safe header snapshots
+    safe-body.ts             # bounded request body readers for JSON/text routes
+    public-only-hosts.ts     # split public/dashboard host routing
+    retention.ts             # optional row-level cleanup
+  proxy.ts                   # Next request-path entrypoint (formerly middleware.ts, renamed in Next 16); host/path guard for public-only deployments
+  instrumentation.ts         # boot hook: migrations, bootstrap key, notify worker
+
+cli/                         # @mantis/cli terminal client
+  src/commands/              # one file per CLI command
+  src/lib/                   # API client, keychain config, output, installers
+mantis-edge/                 # stateless Cloudflare Worker backend
+iot-helper/                  # optional LAN/log watcher for IoT-style triggers
+bench/                       # local performance checks
+tests/                       # Vitest coverage for app and worker behavior
+deploy/                      # Fly and Render deployment examples
+docker/                      # compose sidecar assets
+docker-compose.yml           # local, Tailscale, and Cloudflare Tunnel profiles
+drizzle.config.ts
+pnpm-workspace.yaml
+```

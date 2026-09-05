@@ -1,0 +1,3 @@
+# llms-full.txt is generated from the pages by scripts/build-llms.mjs and mirrors
+# every content change, so GitHub collapses it in diffs. llms.txt stays visible.
+llms-full.txt linguist-generated=true

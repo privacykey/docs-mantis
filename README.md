@@ -35,6 +35,7 @@ Before opening a pull request, run the same two checks CI runs:
 npm run validate     # mint validate — the Mintlify build
 npm run check-links  # mint broken-links
 npm run check        # scripts/check-docs.mjs — nav, anchors, frontmatter, stray JSX
+npm run llms         # scripts/build-llms.mjs — regenerate llms.txt and llms-full.txt
 ```
 
 If you have [`just`](https://github.com/casey/just) installed, `just run` and `just lint` are shorthands for the same commands.
@@ -65,7 +66,13 @@ The navigation groups in `docs.json`, and the files behind them:
 2. Give it frontmatter. `title` and `description` are required; `icon` and `sidebarTitle` are the only other keys `npm run check` accepts without warning.
 3. Register it in `docs.json` under a navigation group, as a path from the repository root with no extension — `host-events`, `deployment/backups`. A page that is not registered will not appear in the sidebar, and `npm run check` warns about unregistered `.mdx` files.
 4. Link between pages with root-relative, extensionless paths (`/getting-started`, `/deployment/fly`). Relative `./file.md` links belong only in the two `.mintignore`d README files, which are read on GitHub.
-5. Run `npm run check` and `npm run validate`.
+5. Run `npm run llms`, then `npm run check` and `npm run validate`.
+
+## AI-readable copies
+
+The site follows the [llms.txt](https://llmstxt.org) convention. `llms.txt` at the repository root indexes every page with its one-line description, and `llms-full.txt` is the whole site as one Markdown file. Both are committed, so they read fine straight from GitHub, and both are served from the site root. The build also writes every page as plain Markdown beside its HTML, so appending `.md` to any page URL returns the Markdown.
+
+`scripts/build-llms.mjs` generates all of it from `docs.json` and each page's frontmatter, using only Node built-ins. Run `npm run llms` after editing a page and commit the result; `npm run check` fails when the committed copies are out of date, and `sync-changelog.yml` regenerates them itself.
 
 ## CI
 
