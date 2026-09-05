@@ -1,12 +1,15 @@
 {
   "name": "mantis-docs",
   "private": true,
+  "homepage": "https://docs.mantis.privacykey.org",
+  "repository": "https://github.com/privacykey/docs-mantis",
   "scripts": {
     "dev": "npx --yes mint@latest dev",
-    "build": "npx --yes mint@latest export && rm -rf dist && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore",
+    "build": "rm -rf dist export.zip && npx --yes mint@latest export && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore && node scripts/build-llms.mjs --dist dist",
+    "check": "node scripts/check-docs.mjs && node scripts/build-llms.mjs --check",
+    "llms": "node scripts/build-llms.mjs",
     "validate": "npx --yes mint@latest validate",
     "check-links": "npx --yes mint@latest broken-links",
-    "check": "node scripts/check-docs.mjs",
     "sync-changelog": "node scripts/sync-changelog.mjs"
   }
 }

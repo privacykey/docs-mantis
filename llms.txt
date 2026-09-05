@@ -1,0 +1,61 @@
+# mantis documentation
+
+> Documentation for Mantis, a self-hostable canary key service.
+
+This file indexes the mantis documentation site at https://docs.mantis.privacykey.org. Every page listed below is also served as plain Markdown at the same URL with `.md` appended, and the whole site is concatenated into one Markdown file at https://docs.mantis.privacykey.org/llms-full.txt.
+
+## Start
+
+- [Mantis documentation](https://docs.mantis.privacykey.org/index.md): Install, deploy, operate, and extend Mantis canary keys.
+- [Getting started](https://docs.mantis.privacykey.org/getting-started.md): Install the CLI, choose a backend, log in, and create your first Mantis key.
+- [Trying it locally](https://docs.mantis.privacykey.org/trying-locally.md): Run Mantis locally with Docker or a contributor development setup.
+- [What can you actually use this for?](https://docs.mantis.privacykey.org/use-cases.md): Common defensive, detective, operational, and research patterns for Mantis canaries.
+
+## Deployment
+
+- [Deployment](https://docs.mantis.privacykey.org/deployment.md): Choose how to run Mantis and expose a public trigger URL.
+- [Local Docker](https://docs.mantis.privacykey.org/deployment/docker-local.md): Run Mantis locally with Docker for evaluation or development.
+- [Deploying Mantis with Tailscale](https://docs.mantis.privacykey.org/deployment/tailscale.md): Expose Mantis through Tailscale Funnel with simple or split public routes.
+- [Deploying Mantis with Cloudflare Tunnel and Access](https://docs.mantis.privacykey.org/deployment/cloudflare.md): Expose a local Mantis instance through Cloudflare Tunnel and optional Access SSO.
+- [Railway deploy](https://docs.mantis.privacykey.org/deployment/railway.md): Deploy Mantis on Railway with a long-running container and Postgres add-on.
+- [Fly.io](https://docs.mantis.privacykey.org/deployment/fly.md): Deploy Mantis to Fly.io with one command, Postgres, and safe proxy defaults.
+- [Render](https://docs.mantis.privacykey.org/deployment/render.md): Deploy Mantis on Render with a Blueprint and managed service.
+- [Public edge limits](https://docs.mantis.privacykey.org/deployment/edge-limits.md): Recommended edge URL, body, and rate limits for public Mantis routes.
+- [Backups and retention](https://docs.mantis.privacykey.org/deployment/backups.md): Back up and restore the Postgres database that stores Mantis data.
+- [Deploying mantis-edge](https://docs.mantis.privacykey.org/edge-deployment.md): Deploy the stateless Cloudflare Worker version of Mantis.
+
+## Reference
+
+- [HTTP API](https://docs.mantis.privacykey.org/api.md): Reference for key management endpoints, trigger responses, and webhook payloads.
+- [Configuration](https://docs.mantis.privacykey.org/configuration.md): Required and optional environment variables for running Mantis.
+- [CLI reference](https://docs.mantis.privacykey.org/cli.md): Every mantis CLI command and flag, verified against the v0.2.0 source.
+- [CLI backup & restore](https://docs.mantis.privacykey.org/cli-backup.md): Export all your CLI profiles and plugin manifest into a passphrase-encrypted file, then restore on another machine.
+- [Updating](https://docs.mantis.privacykey.org/updating.md): Update commands for the server, CLI, edge worker, IoT helper, and host installers.
+- [Changelog](https://docs.mantis.privacykey.org/changelog.md): Published Mantis releases — CLI and server — what changed and where the full notes live.
+
+## Features
+
+- [File keys](https://docs.mantis.privacykey.org/file-keys.md): Generate bait files that fire a Mantis trigger when opened or rendered.
+- [Honey directory](https://docs.mantis.privacykey.org/honey-directory.md): Create a ZIP bundle of bait files wired to the same Mantis key.
+- [Host-event keys](https://docs.mantis.privacykey.org/host-events.md): Install host snippets that fire Mantis keys on shell, login, boot, wake, and network events.
+- [Uptime Kuma integration](https://docs.mantis.privacykey.org/uptime-kuma.md): Use Mantis status URLs with Uptime Kuma notification channels.
+- [Reliability](https://docs.mantis.privacykey.org/reliability.md): Understand hit deduplication, notification retries, worker mode, and bot parsing.
+
+## Operating
+
+- [Single-user by default](https://docs.mantis.privacykey.org/single-user.md): How the default single-user operator model works in Mantis.
+- [Operational notes](https://docs.mantis.privacykey.org/operational-notes.md): Implementation notes for key hashing, disabled-key behavior, and worker mode.
+- [Dev inbox](https://docs.mantis.privacykey.org/dev-inbox.md): Use the built-in local webhook capture while developing Mantis.
+
+## Recipes
+
+- [Mantis canaries in self-hosted apps](https://docs.mantis.privacykey.org/self-hosted-apps.md): Recipes for planting Mantis canaries in common self-hosted applications.
+
+## Architecture
+
+- [Project layout](https://docs.mantis.privacykey.org/architecture.md): Directory map of the Mantis source tree and major application modules.
+
+## Optional
+
+- [mantis source code](https://github.com/privacykey/mantis): the product these docs describe
+- [Documentation source](https://github.com/privacykey/docs-mantis): the repository this site is built from

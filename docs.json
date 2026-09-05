@@ -17,6 +17,11 @@
   "metadata": {
     "timestamp": true
   },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/privacykey/mantis"
+    }
+  },
   "navigation": {
     "directory": "card",
     "groups": [
