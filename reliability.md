@@ -36,7 +36,7 @@ Both worker mode and cron mode run the same retention sweep. If
 `MANTIS_HIT_RETENTION_DAYS`, `MANTIS_NOTIFICATION_RETENTION_DAYS`,
 `MANTIS_AUDIT_RETENTION_DAYS`, or `MANTIS_SESSION_RETENTION_DAYS` are set,
 old rows are purged during the hourly worker loop or the cron invocation. The
-sweep additionally deletes expired `rate_limits` rows (window older than 1 day)
+sweep also deletes expired `rate_limits` rows (window older than 1 day)
 on every run regardless of retention configuration, so the limiter table — whose
 keys embed attacker-rotatable IPs — can't grow without bound.
 
