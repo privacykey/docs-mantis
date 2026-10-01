@@ -186,7 +186,7 @@ The CLI sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on eve
 7. **Save**.
 
 What stays public (don't gate these):
-- `/c/*` — mantis triggers. **Must** be public; this is the whole point.
+- `/c/*` — mantis triggers. **Must** be public so a trigger can be reached.
 - `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll.
 - `/api/wallet/*` — Apple Wallet callbacks. Required only if you enable `.pkpass` support.
 - `/api/health` — optional public health check. Gate it unless an external public monitor needs it.
@@ -211,7 +211,7 @@ Effectively two-factor (CF SSO + mantis API key). If the double login bothers yo
 
 ## Gotchas
 
-- **Cloudflare terminates TLS.** All mantis traffic — including potentially sensitive hit metadata — passes through Cloudflare's edge in plaintext. If your mantis catches genuinely confidential content (email contents, document bodies), CF logs see it. Privacy tradeoff worth knowing.
+- **Cloudflare terminates TLS.** All mantis traffic — including potentially sensitive hit metadata — passes through Cloudflare's edge in plaintext. If your mantis catches confidential content (email contents, document bodies), CF logs see it. Privacy tradeoff worth knowing.
 - **Free Access seats: 50.** Plenty for personal / small team. Past that, paid plan.
 - **Origin protection.** Cloudflare recommends locking your origin to only accept traffic from CF IPs. Mantis already binds to `127.0.0.1` (only reachable inside the Docker network, where cloudflared also lives), so this is taken care of without extra config.
 - **Cloudflare Access cookie + Set-Cookie domain.** If you see the dashboard login cookie not sticking, check the HTTP Host Header setting from Step 2.6 — it should be `mantis.<your-domain>`, not `localhost:3000`.
