@@ -19,7 +19,7 @@ These are the variables operators usually need to understand.
 ## URLs
 
 - `PUBLIC_BASE_URL` — public origin used when Mantis generates trigger, status, and Wallet callback URLs. Defaults to `http://localhost:3000`.
-- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; if you choose a different path, put a reverse proxy in front that rewrites it to `/c/<id>` on the app.
+- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; the app rewrites `<prefix>/<id>` onto its trigger handler itself, so no reverse-proxy rewrite is needed (server ≥ 0.2.0 — earlier releases needed one). Responses under a custom prefix also carry the dashboard's security headers (`X-Frame-Options: DENY`, CSP), which only matters if you embed an `html` response kind in an iframe.
 
 ## Boot and runtime
 
