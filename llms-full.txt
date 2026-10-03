@@ -2618,6 +2618,70 @@ Published Mantis releases — CLI and server — what changed and where the full
 > to confirm CLI/server compatibility, and see [Updating](https://docs.mantis.privacykey.org/updating) for the per-component
 > update commands.
 
+## CLI v0.3.0
+
+3 October 2026
+
+Release for the CLI changes in #108. Use it with server 0.3.0: monitor state is now read through the API, and `last` relies on the server's `?mine=1` listing.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.3.0)
+
+## Server v0.3.0
+
+3 October 2026
+
+Security release for the fixes in #108. Read the upgrade checklist in [`CHANGELOG.md`](https://github.com/privacykey/mantis/blob/main/CHANGELOG.md) before deploying.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/v0.3.0)
+
+## Edge worker v0.2.0
+
+3 October 2026
+
+Release for the edge worker changes in #108.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/edge-v0.2.0)
+
+## Server v0.2.1
+
+5 September 2026
+
+Patch release for the pre-launch fixes in #85.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/v0.2.1)
+
+## Edge worker v0.1.5
+
+5 September 2026
+
+Patch release for the edge webhook allowlist fix in #85.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/edge-v0.1.5)
+
+## CLI v0.2.2
+
+5 September 2026
+
+Patch release including #81, #84, and the release validation from #85.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.2.2)
+
+## Server v0.2.0
+
+5 September 2026
+
+Security hardening release following the pre-launch audit (#86). Hit listings no longer expose admin-configured global webhook URLs to non-admin key owners, `external_id` claims by unrelated full keys are refused, installer templates neutralise hostile memos, API-key minting is admin-only, and `MANTIS_PUBLIC_PATH` finally routes.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/v0.2.0)
+
+## CLI v0.2.1
+
+5 September 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.2.1)
+
 ## CLI v0.2.0
 
 8 August 2026
