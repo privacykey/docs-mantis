@@ -184,3 +184,9 @@ Rotating `MANTIS_EDGE_KEY` immediately invalidates all existing edge URLs. A pra
 4. Re-mint any URLs that should keep working.
 
 Use `--expires-at` when minting short-lived URLs so old URLs naturally age out.
+
+## 8. Limits to know
+
+- **Every request is a hit.** The worker keeps no state: there is no dedupe window and no rate limiter, so each request to an edge URL — any method — forwards one alert. Forwarding retries up to twice on 429, 5xx and timeouts; an alert that still fails is dropped.
+- **Chat alerts do not link the URL.** Slack, Discord and Teams alerts name the canary by a short URL fragment and the worker host, as plain text, because following or previewing a link to the trigger would fire it again. The raw `webhook` payload still carries `key.url` as data.
+- **Workers Free has a daily request quota** (100,000 requests a day across the account). Once it is used up the worker is not invoked at all, and every edge canary is silent until the quota resets. A `*.workers.dev` hostname cannot be protected by WAF or rate-limiting rules, so for anything you rely on, use Workers Paid or serve the worker from a custom domain with a rate-limiting rule, and add an external heartbeat check. See [Platform request quota](https://github.com/privacykey/mantis/blob/main/mantis-edge/README.md#platform-request-quota) in the worker README.

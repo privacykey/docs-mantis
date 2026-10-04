@@ -6,7 +6,9 @@ sidebarTitle: "Uptime Kuma"
 
 Uptime Kuma integration lets you piggyback on [Uptime Kuma](https://github.com/louislam/uptime-kuma)'s 80+ notification integrations when you prefer status-monitor fan-out over mantis's built-in notification destinations.
 
-The mechanic: every key has a per-key *status URL* at `/status/<public_id>` that flips between OK (HTTP 200) and tripped (HTTP 503) when the mantis fires. Point a Uptime Kuma HTTP(s) monitor at that URL — Kuma detects the status code or body change and fires its configured notifications.
+The mechanic: every monitored key has a *status URL*, `/status/<public_id>.<tag>`, that flips between OK (HTTP 200) and tripped (HTTP 503) when the mantis fires. Point a Uptime Kuma HTTP(s) monitor at that URL — Kuma detects the status code or body change and fires its configured notifications.
+
+Copy the status URL from the key's monitor card in the dashboard, from `mantis monitor`, or from `monitor_status_url` in the API. The tag is derived from a server secret, so the status URL cannot be worked out from a trigger URL: someone who finds the bait cannot use it to check whether it has been noticed.
 
 ## Modes
 
@@ -21,12 +23,12 @@ The mechanic: every key has a per-key *status URL* at `/status/<public_id>` that
 ```bash
 # 1. Pick a key and enable monitoring
 mantis monitor <key-id> --mode latch
-#   → status URL: http://mantis.example.com/status/<public_id>
+#   → status URL: http://mantis.example.com/status/<public_id>.<tag>
 #   → current:    ok
 
 # 2. In Uptime Kuma → Add new monitor:
 #      Monitor type:        HTTP(s)
-#      URL:                 http://mantis.example.com/status/<public_id>
+#      URL:                 the status URL printed in step 1
 #      Heartbeat Interval:  30s (or longer; Kuma minimum 20s)
 #      Status code accepted: 200
 #      → Save and attach your preferred notifications
@@ -43,18 +45,19 @@ mantis reset <key-id>   # in latch mode; window mode auto-resets
 
 ## Status endpoint behavior
 
-| Key state | `GET /status/<public_id>` |
+| Request | Response |
 |---|---|
-| Doesn't exist | `404` `{"error":"not_monitored"}` |
-| `monitor_mode = off` | `404` `{"error":"not_monitored"}` (same as nonexistent — no info leak) |
-| Disabled or expired | `404` `{"error":"not_monitored"}` (Uptime Kuma won't keep alerting on a key you've shut down) |
-| Active, no trip | `200` `{"status":"ok","mode":"latch"\|"window"}` |
-| Active, tripped | `503` `{"status":"tripped","tripped_at":"<iso>","mode":...}` |
+| Status URL of an active key, no trip | `200` `{"status":"ok"}` |
+| Status URL of an active key, tripped | `503` `{"status":"tripped"}` |
+| Anything else under `/status/` — no tag or a wrong one, a key that doesn't exist, `monitor_mode = off`, a disabled or expired key | `404` with an empty body |
 
-All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
+Every "nothing to read here" case gets the same empty 404, so the endpoint neither confirms that a key exists nor keeps Uptime Kuma alerting on a key you've shut down. All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
+
+When and how a key tripped (`tripped_at`, mode, window) is not on the public URL. Read it with `mantis status <key-id>` or the owner-only `GET /api/keys/<id>/monitor`.
 
 ## Notes
 
-- Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — `/status/<public_id>` is a separate read-only reflection of state.
+- Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — the status URL is a separate read-only reflection of state.
+- **Upgrading from before 0.3.0:** status URLs used to be `/status/<public_id>`. That form now returns 404, so re-point each monitor at the key's new status URL. Rotating `MANTIS_API_KEY_PEPPER` changes every status URL.
 - Uptime Kuma is optional. The status URL is plain HTTP(s); any monitor that watches for status-code or body changes (e.g., Pingdom, BetterUptime, healthchecks.io, your own cron) works.
 - In `latch` mode, switching to `off` then back to `latch` does not lose trip state — it's derived from `hits` filtered by `monitor_reset_at`.

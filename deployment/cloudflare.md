@@ -68,8 +68,8 @@ docker compose logs cloudflared | grep "Registered tunnel"
 ```
 
 ```bash
-curl -i https://mantis.<your-domain>/status/nonexistent
-# 404 not_monitored JSON from mantis = working
+curl -i https://mantis.<your-domain>/c/nonexistent
+# 200 with a 1×1 GIF from mantis = working (unknown ids answer like real ones)
 ```
 
 Browser: open `https://mantis.<your-domain>` → mantis `/login`.
@@ -187,7 +187,7 @@ The CLI sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on eve
 
 What stays public (don't gate these):
 - `/c/*` — mantis triggers. **Must** be public so a trigger can be reached.
-- `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll.
+- `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll. Only a key's full status URL (`/status/<public_id>.<tag>`) answers; everything else is an empty 404.
 - `/api/wallet/*` — Apple Wallet callbacks. Required only if you enable `.pkpass` support.
 - `/api/health` — optional public health check. Gate it unless an external public monitor needs it.
 - `/inbox*` and `/api/inbox` — dev webhook inbox. Disable for production with `ENABLE_DEV_INBOX=0` if you don't need it.

@@ -35,7 +35,9 @@ mantis install <key-id> --type macos-login --out ~/Library/LaunchAgents/com.mant
 #         GET /api/keys/<id>/install?type=<type>&format=json  for metadata
 ```
 
-The snippets are designed to be unobtrusive — backgrounded execution, 3–10s timeouts, output redirected to `/dev/null`. They won't slow your shell startup or hang your boot if the mantis server is unreachable.
+The snippets are designed to be unobtrusive — backgrounded execution, 3–10s timeouts, output redirected to `/dev/null`. They won't slow your shell startup or hang your boot if the mantis server is unreachable. Boot and wake alarms get one chance per event, often before the network is back, so they retry up to five times over about a minute.
+
+On Windows, the logon task runs as the Users group, in the session of whichever account logs on. The wake and network tasks run as LOCAL SERVICE, so they fire with nobody logged on.
 
 **Example: alert me on every SSH login**
 
@@ -67,7 +69,7 @@ In addition to host-event installers, the same `/install` endpoint generates two
 
 | Type | Fires when | Use case |
 |---|---|---|
-| `css-background` | The CSS is rendered anywhere (browser loads the URL as a background image) | Detect when someone copies your stylesheet to their own site. **Fires on your own site too** — distinguish by Referer header. |
+| `css-background` | The CSS is rendered anywhere (browser loads the URL as a background image) | Detect when someone copies your stylesheet to their own site. **Fires on your own site too** — declare your site's origin on the key so those hits are ignored. |
 | `js-clone-detector` | The script runs on a hostname other than the expected one (or any subdomain of it) | Detect site cloning / phishing copies. Includes a runtime hostname check so it does **not** fire on your real site. |
 
 ```bash
@@ -80,9 +82,11 @@ mantis install <key-id> --type js-clone-detector --hostname example.com --out ./
 
 Both are also visible as tabs ("web CSS", "web JS") on the key detail page in the dashboard, with the JS tab exposing an inline hostname input field. The dashboard tab regenerates the snippet whenever you change the hostname.
 
-The CSS uses partial escape-sequence obfuscation on the URL (`\6c` for `l`, etc.) so the canary URL is less obvious to a casual reader of the stylesheet — browsers parse it identically.
+Your own site loads the CSS on every page view. Add your site's origin (for example `https://www.example.com`) under "your own site" on the key page, or as `self_origins` in the API. Hits whose Referer comes from those origins are ignored, so your own visitors can't occupy the dedupe window and hide a cloned site's hit. This needs your pages to send at least an origin Referer — the browser default does; `Referrer-Policy: no-referrer` or `same-origin` does not — and a clone that hot-links your stylesheet instead of copying it is not detected.
 
-The JS snippet sends explicit `?l=<location>&r=<referrer>` query params alongside the canary URL so you can identify the cloning site even when the Referer header is stripped (strict referrer policies, mixed-protocol downgrades, etc.).
+The CSS uses partial escape-sequence obfuscation on the URL (`\00006c` for `l`, etc.) so the canary URL is less obvious to a casual reader of the stylesheet. Snippets generated before 0.3.0 used short escapes that usually decoded to a different URL and never fired — regenerate and re-paste them.
+
+The JS snippet sends explicit `?l=<location>&r=<referrer>` query params alongside the canary URL so you can identify the cloning site even when the Referer header is stripped (strict referrer policies, mixed-protocol downgrades, etc.). They are stored with the hit as `x-mantis-page-url` and `x-mantis-page-referrer`.
 
 ## Physical snippets (NFC)
 
@@ -137,7 +141,9 @@ Every hit then POSTs a `mantis.hit` JSON payload (memo, IP, user-agent, and the
 full `host_context`) to that webhook. The target URL must end in
 `/api/webhook/<id>`. To scaffold the HA side, generate a ready-to-paste
 automation skeleton — it listens on the webhook, drops the activation ping, and
-shows example actions (switch toggle, mobile push, logbook entry):
+shows example actions (switch toggle, mobile push, logbook entry). The file
+carries an unguessable webhook id; treat it like a secret, because it is the
+only credential between Mantis and Home Assistant:
 
 ```bash
 mantis install <key-id> --type homeassistant-receiver --out mantis-ha-receiver.yaml
@@ -145,7 +151,13 @@ mantis install <key-id> --type homeassistant-receiver --out mantis-ha-receiver.y
 
 If Mantis reaches HA over a private/Tailscale address, the SSRF guard blocks it
 unless you set `ALLOW_PRIVATE_WEBHOOKS=1` (an instance-wide switch — prefer
-restricting egress at the network layer).
+restricting egress at the network layer). A refused destination always reports
+"destination refused: it does not resolve to a public address"; the server log
+has the reason.
+
+Receivers generated before 0.3.0 used a webhook id derived from the key id
+(`mantis-<8 hex>`). Generate the file again and re-register the destination to
+move to an unguessable id.
 
 For devices that do not expose useful webhooks, [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) can watch LAN neighbor tables and log files, then fire the same Mantis URL for unexpected online/login events.
 
@@ -156,7 +168,7 @@ Each installer sends `X-Mantis-*` headers alongside the hit, which the server pa
 | Header | Set by | Useful for |
 |---|---|---|
 | `X-Mantis-Source` | every installer or `?src=` helper | which installer fired (shell / shell-sudo / macos-login / macos-boot / macos-wake / macos-network / linux-boot / linux-wake / linux-network / windows-logon / windows-wake / windows-network / nfc / homeassistant / scrypted / iot-network / iot-log / wallet-installed / wallet-uninstalled / wallet-fetched) |
-| `X-Mantis-User` | `shell`, `shell-sudo`, `macos-login`, `macos-network`, `macos-wake`, `windows-logon`, `windows-wake`, `windows-network` | OS account |
+| `X-Mantis-User` | `shell`, `shell-sudo`, `macos-login`, `macos-network`, `macos-wake`, `windows-logon` | OS account |
 | `X-Mantis-Host` | every installer | which of your machines |
 | `X-Mantis-SSH-Client` | `shell`, `shell-sudo` (when SSH'd in) | **the SSH client's IP** |
 | `X-Mantis-SSH-Connection` | `shell`, `shell-sudo` (when SSH'd in) | full sshd connection tuple |
@@ -170,7 +182,7 @@ Each installer sends `X-Mantis-*` headers alongside the hit, which the server pa
 | `X-Mantis-Area` | Home Assistant / Scrypted | room/area |
 | `X-Mantis-Iot-Mac` / `X-Mantis-Iot-Ip` | IoT helper | observed MAC/IP |
 
-(Boot-time installers don't include `X-Mantis-User` because no user is logged in yet.)
+(Boot-time installers don't include `X-Mantis-User` because no user is logged in yet. The Windows wake and network tasks run as LOCAL SERVICE, not as a person, and don't send it either.)
 
 The big win is `$SSH_CLIENT` — when someone SSHes into your machine and the shell snippet fires, the mantis records the **SSH client's IP**, not just the machine's own public IP. The dashboard surfaces this prominently as `← <client-ip>` next to the user/host context. The CLI shows the same:
 

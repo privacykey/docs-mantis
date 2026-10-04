@@ -77,7 +77,8 @@ Verify:
 
 ```bash
 docker compose logs tailscale | grep -E "Success|funnel"
-curl -i https://mantis.<your-tailnet>.ts.net/status/nonexistent
+curl -i https://mantis.<your-tailnet>.ts.net/c/nonexistent
+# 200 with a 1×1 GIF = mantis is answering (unknown ids answer like real ones)
 ```
 
 ## Option B — Split Serve + Funnel
@@ -112,7 +113,10 @@ PUBLIC_ONLY_HOSTS=mantis-public.<your-tailnet>.ts.net
 DASHBOARD_HOSTS=mantis-private.<your-tailnet>.ts.net
 
 # Usually useful behind Tailscale's proxy so hit logs show client IPs.
+# Tailscale writes X-Forwarded-For and nothing else, so only that header is
+# believed. docker-compose.yml already defaults TRUSTED_IP_HEADER to it.
 TRUST_PROXY_HEADERS=1
+TRUSTED_IP_HEADER=x-forwarded-for
 ```
 
 Start it:
@@ -125,14 +129,14 @@ Verify public behavior from a non-tailnet network, for example a phone on
 cellular:
 
 ```bash
-curl -i https://mantis-public.<your-tailnet>.ts.net/status/nonexistent
+curl -i https://mantis-public.<your-tailnet>.ts.net/c/nonexistent
 curl -i https://mantis-public.<your-tailnet>.ts.net/login
 curl -i https://mantis-public.<your-tailnet>.ts.net/api/keys
 ```
 
 Expected:
 
-- `/status/nonexistent` reaches mantis and returns `404 not_monitored`.
+- `/c/nonexistent` reaches mantis and returns `200` with a 1×1 GIF.
 - `/login` returns a plain `404`.
 - `/api/keys` returns a plain `404`, not a mantis auth challenge.
 
@@ -148,7 +152,16 @@ mantis doctor --public-url https://mantis-public.<your-tailnet>.ts.net
 Use the private hostname for dashboard and CLI. Use the public hostname for
 generated mantis trigger/status URLs; `PUBLIC_BASE_URL` already handles that.
 `mantis doctor` verifies the private API, then checks the public hostname hides
-`/login` and `/api/*` while leaving `/status/*` reachable.
+`/login` and `/api/*`.
+
+The split is enforced twice. Mantis gates paths by hostname, and the Funnel
+sidecar's `docker/tailscale/serve-public.json` proxies only `/c`, `/status` and
+`/api/wallet`, so a Funnel caller cannot reach dashboard paths whatever `Host`
+header it sends. If you change `MANTIS_PUBLIC_PATH`, or set
+`PUBLIC_ONLY_ALLOW_HEALTH=1` / `PUBLIC_ONLY_ALLOW_INBOX=1`, add the matching
+handler to that file (for example `"/t": {"Proxy": "http://mantis:3000/t"}`)
+and recreate the `tailscale-public` container. Never add a `/` handler there:
+it would expose the dashboard through Funnel.
 
 ## Public edge limits
 

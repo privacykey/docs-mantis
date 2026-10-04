@@ -12,4 +12,6 @@ A built-in webhook capture, only enabled with `ENABLE_DEV_INBOX=1`:
 
 The `/inbox/<slug>` capture endpoint is unauthenticated by design so it can receive webhooks, but reading or clearing the captured buffer requires operator auth.
 
+Credential headers on a captured request — `Cookie`, `Authorization`, API-key and token headers — are stored as `[redacted]`. The inbox shares the dashboard's origin, so a browser landing on it would otherwise leave the operator's session cookie in the buffer.
+
 Use it as your webhook target while developing, instead of webhook.site. State is in-memory only — it resets when the server restarts. Do not expose it in production.

@@ -14,7 +14,7 @@ Use these as starting values, then adjust for your traffic:
 
 | Surface | Methods | URL limit | Body limit | Rate limit |
 |---|---:|---:|---:|---:|
-| `/c/*` | `GET`, `HEAD`, `POST` | 2 KB | 16 KB | 120/min/IP |
+| `/c/*` | any | 2 KB | 16 KB | 120/min/IP |
 | `/status/*` | `GET`, `HEAD` | 1 KB | 0 | 240/min/IP |
 | `/api/wallet/*` | Wallet methods | 4 KB | 64 KB | 120/min/IP |
 | `/inbox*`, `/api/inbox` | dev only | 2 KB | 1 MiB | private/dev only |
@@ -23,8 +23,14 @@ Notes:
 
 - `/c/:public_id` only needs a short public ID and an optional short `src`
   query parameter. A 2 KB URI ceiling is generous.
-- Mantis does not need request bodies on `/c/*`; `POST` is accepted only for
-  clients that can only signal by POST.
+- Mantis does not need request bodies on `/c/*`. Any method and any path under
+  a trigger URL reach the trigger handler, so bait placed in a base-URL field
+  (an AWS `endpoint_url`, an `API_BASE_URL`) fires when a tool appends its own
+  path. Don't restrict `/c/*` to `GET` at the edge.
+- A per-IP limit at the edge drops requests before Mantis sees them, including
+  a real hit from an address that junk requests have already pushed over the
+  limit (an intruder and a monitored host behind one NAT, for example). Mantis
+  itself limits per key for that reason, so keep the `/c/*` threshold generous.
 - If you intentionally embed long attribution in query strings, raise the URL
   limit for `/c/*` and keep the app's storage caps in sync.
 - Node's default HTTP request-header limit is 16 KiB. Railway's public proxy
