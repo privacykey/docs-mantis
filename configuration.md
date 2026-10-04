@@ -19,7 +19,8 @@ These are the variables operators usually need to understand.
 ## URLs
 
 - `PUBLIC_BASE_URL` — public origin used when Mantis generates trigger, status, and Wallet callback URLs. Defaults to `http://localhost:3000`.
-- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; the app rewrites `<prefix>/<id>` onto its trigger handler itself, so no reverse-proxy rewrite is needed (server ≥ 0.2.0 — earlier releases needed one). Responses under a custom prefix also carry the dashboard's security headers (`X-Frame-Options: DENY`, CSP), which only matters if you embed an `html` response kind in an iframe.
+- `DASHBOARD_BASE_URL` — origin used for the dashboard links in Slack / Discord / Teams / email alerts and for `dashboard_url` in webhook and Home Assistant payloads. Alerts never link the trigger URL, because following it fires the key. Defaults to `PUBLIC_BASE_URL`, or — when the host split below makes that host public-only — to the first `DASHBOARD_HOSTS` entry on `PUBLIC_BASE_URL`'s scheme and port. Set it when that default is wrong.
+- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; the app rewrites `<prefix>/<id>` onto its trigger handler itself, so no reverse-proxy rewrite is needed. Anything under a trigger URL fires the key too — `<prefix>/<id>/<any path>`, any HTTP method, with or without a trailing slash — so bait placed in a base-URL field still registers when a tool appends its own path. Responses under a custom prefix also carry the dashboard's security headers (`X-Frame-Options: DENY`, CSP), which only matters if you embed an `html` response kind in an iframe.
 
 ## Boot and runtime
 
@@ -44,12 +45,26 @@ can set a Slack or webhook once and have every key you mint — including
 bulk-created ones — alert you without further setup. A destination listed both
 globally and on a key fires once (the key's own row wins, keeping its signing
 secret and activation history). There is no environment variable or CLI
-subcommand for the global set; it lives only in the admin dashboard.
+subcommand for the global set; it lives only in the admin dashboard. The same
+page shows each global webhook's signing-secret fingerprint and lets an admin
+reveal or rotate the secret, so the receiver can verify deliveries.
+
+A webhook or Home Assistant destination that points back at the Mantis instance
+itself is refused, on a key or globally: delivering to its own trigger URL would
+record every alert as a new hit.
+
+## Fleet enrollment
+
+Enrollment-scoped API keys ship on every managed device, so they can only mint
+plain tripwires — see [key scope](/api#api-key-scope-full-vs-enroll).
+
+- `MANTIS_ENROLL_DESTINATIONS` — destinations an enrollment key may attach when it creates a key: a whitespace-separated list of `channel:target` pairs, e.g. `slack:https://hooks.slack.com/services/T000/B000/XXXX`. Unset (the default) means enrollment keys cannot attach destinations at all; route fleet alerts with a global destination instead. Anything not listed is refused with `403` before it is stored or pinged.
+- `MANTIS_ENROLL_KEYS_PER_HOUR` — new keys one enrollment key may create per hour. Default `1000`; `0` disables the cap. Re-claims of an existing `external_id` are not counted.
 
 ## Proxy and public-only hosts
 
-- `TRUST_PROXY_HEADERS=1` — trust `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, and `x-forwarded-for` for forensic IP logging. Set only behind a proxy that strips and re-injects those headers. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
-- `TRUSTED_IP_HEADER` — pin client-IP extraction to a single header (matched case-insensitively), e.g. `x-real-ip`. By default Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present; behind a non-Cloudflare proxy (nginx, Caddy, Traefik) that sets only `x-real-ip` and doesn't strip an inbound `cf-connecting-ip`, an attacker could forge `cf-connecting-ip` and have it trusted. Pin this to the one header your proxy authoritatively writes so all others are ignored. Only takes effect when `TRUST_PROXY_HEADERS` is on.
+- `TRUST_PROXY_HEADERS=1` — trust a client-IP header for forensic IP logging. Set it only behind a reverse proxy or tunnel, and always together with `TRUSTED_IP_HEADER` below: no proxy overwrites every candidate header, and any it lets through is client-controlled. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
+- `TRUSTED_IP_HEADER` — the single header your ingress writes (matched case-insensitively): `cf-connecting-ip` behind Cloudflare or cloudflared, `x-forwarded-for` behind Tailscale serve/Funnel, Fly or Render, `x-real-ip` or `x-forwarded-for` behind nginx / Caddy / Traefik (whichever you configured it to set). Left unset, Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present. That order is only safe when your ingress overwrites the first of those it forwards; behind a proxy that writes only `x-forwarded-for` or `x-real-ip`, a client can send its own `cf-connecting-ip` and choose the IP recorded on hits. Mantis logs a one-time warning when headers are trusted without a pin, and ignores a header value that is not an IP literal. The repository's `docker-compose.yml` pins `x-forwarded-for` by default; override it in `.env` for a proxy that writes a different header. Only takes effect when `TRUST_PROXY_HEADERS` is on.
 - `TRUST_PROXY_HOPS` — number of trusted reverse-proxy hops in front of Mantis, default `1` (clamped to 1–16). Only affects `x-forwarded-for` parsing: the client IP is taken this many entries from the right of the chain (your nearest proxy appends the real peer on the right), so a client can't forge it past your proxy. Raise it only if you stack multiple trusted proxies; it has no effect on single-value headers like `cf-connecting-ip` or `x-real-ip`.
 - `FORCE_SECURE_COOKIES` — override the `Secure` flag on the dashboard session cookie. `1` forces it on, `0` forces it off; unset derives it from the request scheme (`X-Forwarded-Proto`, or the RFC 7239 `Forwarded` header's leftmost hop). Set `1` behind a proxy or tunnel that terminates real TLS but sets **neither** scheme header — otherwise the session cookie travels un-`Secure` over genuine HTTPS. Leave it unset for the proxies Mantis documents (Cloudflare, cloudflared, Tailscale, nginx), which all set a scheme header. Don't force it on over plain HTTP: the browser would then never send the cookie back and login would break.
 - `PUBLIC_ONLY_HOSTS` — comma/space-separated hostnames that should expose only public routes: trigger URLs, status URLs, and Wallet callbacks.
@@ -66,7 +81,9 @@ subcommand for the global set; it lives only in the admin dashboard.
 ## Retention
 
 Unset retention variables mean retain forever. The notify worker sweeps hourly;
-cron mode runs the same sweep through `/api/cron/notifications`.
+cron mode runs the same sweep, about once an hour, from
+`/api/cron/notifications` — so with the worker off, nothing is deleted unless
+that endpoint is actually being called on a schedule.
 
 - `MANTIS_HIT_RETENTION_DAYS` — delete hits older than N days; notifications cascade.
 - `MANTIS_NOTIFICATION_RETENTION_DAYS` — delete settled notifications older than N days.

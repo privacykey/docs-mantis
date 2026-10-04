@@ -89,9 +89,12 @@ fly deploy --app my-mantis --config fly.toml
 
 The repository also includes an opt-in
 [`fly-deploy.yml`](https://github.com/privacykey/mantis/blob/main/.github/workflows/fly-deploy.yml)
-workflow for deploys from `main`. It stays inert until you configure the
-app-scoped `FLY_API_TOKEN`, `FLY_APP`, and `FLY_DEPLOY_ENABLED=true` repository
-settings described at the top of that file.
+workflow. It deploys `main` only, and stays inert until you configure the
+settings described at the top of that file: `FLY_APP` and
+`FLY_DEPLOY_ENABLED=true` as repository variables, and the app-scoped
+`FLY_API_TOKEN` as a secret of a GitHub environment named `production` whose
+only deployment branch is `main`. Keeping the token in the environment, not in
+repository secrets, means no other branch can use it.
 
 ## Verify
 

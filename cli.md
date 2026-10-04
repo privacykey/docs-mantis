@@ -153,6 +153,11 @@ API. See [Cloudflare deployment](/deployment/cloudflare) for context.
 | `cloudflare set-service-auth` | `--client-id <id>` (ends in `.access`), `--client-secret <secret>`, `--client-secret-stdin` (read the secret from stdin, leak-free for CI) |
 | `cloudflare status` | none |
 
+These commands act on the profile chosen with the global `--profile` flag
+(default: the current profile), and `login` and `set-service-auth` print the
+target profile and server before anything is stored. `--base-url` is rejected
+here, because Access settings belong to a profile.
+
 `set-service-auth` configures a Service-Auth client-id + client-secret pair for
 headless CLI usage.
 
@@ -274,8 +279,10 @@ Show one key.
 
 ### `mantis last`
 
-Print the id of the most-recently-created key. (Or pass `last` as the `<id>`
-argument on any command.) No flags.
+Print the id of the key this API key created most recently. (Or pass `last` as
+the `<id>` argument on any command.) Keys created in the dashboard or with
+another API key are not considered. Commands that act on a key print which key
+`last` or an id prefix resolved to before they do anything. No flags.
 
 ### `mantis open [id]`
 
@@ -417,6 +424,17 @@ Mint one key per host alarm for a machine.
 `--bundle` is the reversible option — you read the script before running it;
 `--install` is the apply-now shortcut for the machine you're on.
 
+Re-running `device new` for the same machine reuses its keys. It refuses to arm
+a reused key that another API key created, or that is disabled or set to
+expire, and says which key that is.
+
+Run the bundle's `install.sh` as the account you want watched; it asks for
+`sudo` itself where an alarm needs root. Run with `sudo`, it installs the
+per-user alarms for the account that called `sudo` (on macOS, failing that, the
+user at the console). On Linux a direct root login installs them for root. Set
+`MANTIS_TARGET_USER=<name>` to choose. `install.ps1` exits non-zero if any
+scheduled task fails to register.
+
 ---
 
 ## Hits & monitoring
@@ -487,7 +505,7 @@ notification destinations on a key. Channels: `webhook`, `email`, `slack`,
 | `destinations rotate-secret <key-id> <destination-id>` | `-y, --yes` (skip the confirmation prompt) |
 
 - `add` fires an activation ping when the destination is created.
-- `test` fires a synthetic hit on the key URL and reports which destinations succeeded.
+- `test` fires a synthetic hit on the key URL and reports which destinations succeeded. It is a real hit: it trips an enabled monitor and starts the key's dedupe window.
 - `rotate-secret` rotates the HMAC signing secret on a webhook destination; the new secret is shown **once**.
 
 These subcommands manage destinations **on one key**. To route *every* key's
@@ -637,7 +655,7 @@ with format details and automation examples — see
 
 | Flag | What it does |
 |---|---|
-| `--overwrite` | Replace profiles that already exist on this machine (otherwise they're skipped) |
+| `--overwrite` | Replace profiles that already exist on this machine, and stored credentials for a server another profile already uses (otherwise they're skipped) |
 | `--skip-plugins` | Don't re-install plugins from the manifest |
 | `--passphrase-stdin` | Read the passphrase from stdin instead of prompting |
 | `--passphrase-env <var>` | Read the passphrase from the named environment variable |

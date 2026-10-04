@@ -28,13 +28,14 @@ destination-secret / wallet-config events across the instance.
 `{ scope }`, default `full`). A `full` key behaves as described above. An
 `enroll` key is **create-only**: it can call only `POST /api/keys`, and gets
 `403` on every other route — it cannot list keys, read hit history, read alert
-routing or signing secrets, or log in to the dashboard. The one thing it can
-read back is a key it can name: re-posting an `external_id` that already exists
-returns that key's trigger URL, `public_id` and expiry (the memo is `null` and
-alert routing is never included) even when another API key created it, and the
-claim is audited as `key.claimed` with `cross_key: true`. So an enroll key is
-safe to embed on managed machines only to the extent your `external_id`s are
-hard to guess; `mantis device` derives them deterministically from the machine
-name. A full-scope key that did not create the key gets `409` instead. `is_admin` and `enroll`
+routing or signing secrets, or log in to the dashboard. What it creates is a
+plain tripwire: it cannot set an expiry, monitor settings or a redirect / HTML
+/ JSON response, and it can attach only destinations an admin approved in
+`MANTIS_ENROLL_DESTINATIONS`. The one thing it can read back is a key in its
+own fleet that it can name: re-posting an `external_id` that already exists
+returns that key's trigger URL, `public_id` and expiry (the memo is `null`
+unless it created the key, and alert routing is never included), audited as
+`key.claimed` with `cross_key: true`. A key from another fleet gets `409`
+instead, as does a full-scope key that did not create the key. `is_admin` and `enroll`
 are mutually exclusive. See [key scope in the HTTP
 API](/api#api-key-scope-full-vs-enroll).

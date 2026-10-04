@@ -411,7 +411,8 @@ Verify:
 
 ```bash
 docker compose logs tailscale | grep -E "Success|funnel"
-curl -i https://mantis.<your-tailnet>.ts.net/status/nonexistent
+curl -i https://mantis.<your-tailnet>.ts.net/c/nonexistent
+# 200 with a 1×1 GIF = mantis is answering (unknown ids answer like real ones)
 ```
 
 ## Option B — Split Serve + Funnel
@@ -446,7 +447,10 @@ PUBLIC_ONLY_HOSTS=mantis-public.<your-tailnet>.ts.net
 DASHBOARD_HOSTS=mantis-private.<your-tailnet>.ts.net
 
 # Usually useful behind Tailscale's proxy so hit logs show client IPs.
+# Tailscale writes X-Forwarded-For and nothing else, so only that header is
+# believed. docker-compose.yml already defaults TRUSTED_IP_HEADER to it.
 TRUST_PROXY_HEADERS=1
+TRUSTED_IP_HEADER=x-forwarded-for
 ```
 
 Start it:
@@ -459,14 +463,14 @@ Verify public behavior from a non-tailnet network, for example a phone on
 cellular:
 
 ```bash
-curl -i https://mantis-public.<your-tailnet>.ts.net/status/nonexistent
+curl -i https://mantis-public.<your-tailnet>.ts.net/c/nonexistent
 curl -i https://mantis-public.<your-tailnet>.ts.net/login
 curl -i https://mantis-public.<your-tailnet>.ts.net/api/keys
 ```
 
 Expected:
 
-- `/status/nonexistent` reaches mantis and returns `404 not_monitored`.
+- `/c/nonexistent` reaches mantis and returns `200` with a 1×1 GIF.
 - `/login` returns a plain `404`.
 - `/api/keys` returns a plain `404`, not a mantis auth challenge.
 
@@ -482,7 +486,16 @@ mantis doctor --public-url https://mantis-public.<your-tailnet>.ts.net
 Use the private hostname for dashboard and CLI. Use the public hostname for
 generated mantis trigger/status URLs; `PUBLIC_BASE_URL` already handles that.
 `mantis doctor` verifies the private API, then checks the public hostname hides
-`/login` and `/api/*` while leaving `/status/*` reachable.
+`/login` and `/api/*`.
+
+The split is enforced twice. Mantis gates paths by hostname, and the Funnel
+sidecar's `docker/tailscale/serve-public.json` proxies only `/c`, `/status` and
+`/api/wallet`, so a Funnel caller cannot reach dashboard paths whatever `Host`
+header it sends. If you change `MANTIS_PUBLIC_PATH`, or set
+`PUBLIC_ONLY_ALLOW_HEALTH=1` / `PUBLIC_ONLY_ALLOW_INBOX=1`, add the matching
+handler to that file (for example `"/t": {"Proxy": "http://mantis:3000/t"}`)
+and recreate the `tailscale-public` container. Never add a `/` handler there:
+it would expose the dashboard through Funnel.
 
 ## Public edge limits
 
@@ -616,8 +629,8 @@ docker compose logs cloudflared | grep "Registered tunnel"
 ```
 
 ```bash
-curl -i https://mantis.<your-domain>/status/nonexistent
-# 404 not_monitored JSON from mantis = working
+curl -i https://mantis.<your-domain>/c/nonexistent
+# 200 with a 1×1 GIF from mantis = working (unknown ids answer like real ones)
 ```
 
 Browser: open `https://mantis.<your-domain>` → mantis `/login`.
@@ -735,7 +748,7 @@ The CLI sends `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on eve
 
 What stays public (don't gate these):
 - `/c/*` — mantis triggers. **Must** be public so a trigger can be reached.
-- `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll.
+- `/status/*` — Uptime Kuma monitor URLs. **Must** be public so Uptime Kuma can poll. Only a key's full status URL (`/status/<public_id>.<tag>`) answers; everything else is an empty 404.
 - `/api/wallet/*` — Apple Wallet callbacks. Required only if you enable `.pkpass` support.
 - `/api/health` — optional public health check. Gate it unless an external public monitor needs it.
 - `/inbox*` and `/api/inbox` — dev webhook inbox. Disable for production with `ENABLE_DEV_INBOX=0` if you don't need it.
@@ -926,9 +939,12 @@ fly deploy --app my-mantis --config fly.toml
 
 The repository also includes an opt-in
 [`fly-deploy.yml`](https://github.com/privacykey/mantis/blob/main/.github/workflows/fly-deploy.yml)
-workflow for deploys from `main`. It stays inert until you configure the
-app-scoped `FLY_API_TOKEN`, `FLY_APP`, and `FLY_DEPLOY_ENABLED=true` repository
-settings described at the top of that file.
+workflow. It deploys `main` only, and stays inert until you configure the
+settings described at the top of that file: `FLY_APP` and
+`FLY_DEPLOY_ENABLED=true` as repository variables, and the app-scoped
+`FLY_API_TOKEN` as a secret of a GitHub environment named `production` whose
+only deployment branch is `main`. Keeping the token in the environment, not in
+repository secrets, means no other branch can use it.
 
 ## Verify
 
@@ -976,7 +992,7 @@ Use these as starting values, then adjust for your traffic:
 
 | Surface | Methods | URL limit | Body limit | Rate limit |
 |---|---:|---:|---:|---:|
-| `/c/*` | `GET`, `HEAD`, `POST` | 2 KB | 16 KB | 120/min/IP |
+| `/c/*` | any | 2 KB | 16 KB | 120/min/IP |
 | `/status/*` | `GET`, `HEAD` | 1 KB | 0 | 240/min/IP |
 | `/api/wallet/*` | Wallet methods | 4 KB | 64 KB | 120/min/IP |
 | `/inbox*`, `/api/inbox` | dev only | 2 KB | 1 MiB | private/dev only |
@@ -985,8 +1001,14 @@ Notes:
 
 - `/c/:public_id` only needs a short public ID and an optional short `src`
   query parameter. A 2 KB URI ceiling is generous.
-- Mantis does not need request bodies on `/c/*`; `POST` is accepted only for
-  clients that can only signal by POST.
+- Mantis does not need request bodies on `/c/*`. Any method and any path under
+  a trigger URL reach the trigger handler, so bait placed in a base-URL field
+  (an AWS `endpoint_url`, an `API_BASE_URL`) fires when a tool appends its own
+  path. Don't restrict `/c/*` to `GET` at the edge.
+- A per-IP limit at the edge drops requests before Mantis sees them, including
+  a real hit from an address that junk requests have already pushed over the
+  limit (an intruder and a monitored host behind one NAT, for example). Mantis
+  itself limits per key for that reason, so keep the `/c/*` threshold generous.
 - If you intentionally embed long attribution in query strings, raise the URL
   limit for `/c/*` and keep the app's storage caps in sync.
 - Node's default HTTP request-header limit is 16 KiB. Railway's public proxy
@@ -1471,6 +1493,12 @@ Rotating `MANTIS_EDGE_KEY` immediately invalidates all existing edge URLs. A pra
 
 Use `--expires-at` when minting short-lived URLs so old URLs naturally age out.
 
+## 8. Limits to know
+
+- **Every request is a hit.** The worker keeps no state: there is no dedupe window and no rate limiter, so each request to an edge URL — any method — forwards one alert. Forwarding retries up to twice on 429, 5xx and timeouts; an alert that still fails is dropped.
+- **Chat alerts do not link the URL.** Slack, Discord and Teams alerts name the canary by a short URL fragment and the worker host, as plain text, because following or previewing a link to the trigger would fire it again. The raw `webhook` payload still carries `key.url` as data.
+- **Workers Free has a daily request quota** (100,000 requests a day across the account). Once it is used up the worker is not invoked at all, and every edge canary is silent until the quota resets. A `*.workers.dev` hostname cannot be protected by WAF or rate-limiting rules, so for anything you rely on, use Workers Paid or serve the worker from a custom domain with a rate-limiting rule, and add an external heartbeat check. See [Platform request quota](https://github.com/privacykey/mantis/blob/main/mantis-edge/README.md#platform-request-quota) in the worker README.
+
 # HTTP API
 Source: https://docs.mantis.privacykey.org/api
 
@@ -1506,29 +1534,30 @@ are called out explicitly below.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/keys` | Create a key. Bearer auth. Body: `{ memo, external_id?, response_kind?, response_payload?, destinations?, expires_at?, dedupe_window_seconds?, monitor_mode?, monitor_window_seconds? }`. Supply `external_id` to make creation idempotent — see [below](#idempotent-creation). The one route enrollment-scoped keys may call. |
-| `GET` | `/api/keys?limit=&cursor=` | List accessible keys. Bearer auth. Admin keys see all; non-admin keys see rows they created. |
+| `POST` | `/api/keys` | Create a key. Bearer auth. Body: `{ memo, external_id?, response_kind?, response_payload?, destinations?, expires_at?, dedupe_window_seconds?, monitor_mode?, monitor_window_seconds?, self_origins?, adopt? }`. `expires_at` must be in the future, and `memo` and destination targets may not contain control characters. Supply `external_id` to make creation idempotent — see [below](#idempotent-creation). The one route enrollment-scoped keys may call, with a [restricted body](#api-key-scope-full-vs-enroll). |
+| `GET` | `/api/keys?limit=&cursor=&mine=1` | List accessible keys. Bearer auth. Admin keys see all; non-admin keys see rows they created. `mine=1` restricts any caller, admins included, to keys it created (the CLI's `last` uses it). |
 | `GET` | `/api/keys/:id` | Get one accessible key. Bearer auth. |
-| `PATCH` | `/api/keys/:id` | Update memo, response, expiry, dedupe, monitor mode/window, `disabled`, or replace destinations. Bearer auth. |
+| `PATCH` | `/api/keys/:id` | Update memo, response, expiry, dedupe, monitor mode/window, `self_origins`, `disabled`, or replace destinations. Bearer auth. |
 | `DELETE` | `/api/keys/:id` | Hard-delete a key and cascading hits/notifications. Bearer auth. |
-| `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. |
-| `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer auth. |
+| `GET` | `/api/keys/:id/hits?limit=&cursor=` | Paginated hit log for one key. Bearer auth. Each hit carries a `notifications` array; see [notification rows](#notification-rows-in-hit-listings). |
+| `GET` | `/api/hits/recent?since=<iso>&cursor=<iso>&key_id=<id>&limit=<n>` | Recent hit feed across accessible keys, used by CLI watch mode. Bearer or session auth. Same `notifications` shape as above. |
 | `GET` | `/api/keys/:id/download?format=<format>` | Download a generated artifact. Bearer or session auth. Formats: `docx`, `xlsx`, `pptx`, `pdf`, `folder`, `nfc-label`, `apple-wallet`, `svg`, `html`, `md`, `eml`, `ics`, `vcf`, `rtf`, `cookies`, `bookmarks`, `env`, `aws-credentials`, `netrc`, `kubeconfig`, `ovpn`, `rdp`. See [file keys](https://docs.mantis.privacykey.org/file-keys). |
 | `POST` | `/api/keys/bulk-download` | Zip one generated artifact per key. Bearer or session auth. Body: `{ ids, format }`, max 50 ids; returns a `.zip` with one artifact (or per-key folder) per key. Ids not visible to the caller are silently skipped, not rejected. |
 | `POST` | `/api/keys/device-bundle` | Package an already-minted device suite into an installable zip. Bearer or session auth. Body: `{ device, os, vectors }`, max 20 vectors; returns the install zip, or a JSON file map with `?format=json`. Backs the dashboard's device page and `mantis device new --bundle`. |
 | `GET` | `/api/keys/:id/install?type=<type>[&hostname=example.com][&format=json]` | Generated installer snippet for host, web, NFC, and IoT events. Bearer or session auth. |
-| `POST` | `/api/keys/:id/reset` | Reset a key's latched monitor state. Bearer or session auth. |
+| `GET` | `/api/keys/:id/monitor` | Monitor state for one accessible key: `{ state, tripped_at, mode, window_seconds }`. Bearer or session auth. The public status URL returns the state only; the detail lives here. |
+| `POST` | `/api/keys/:id/reset` | Reset a key's latched monitor state. Bearer or session auth. Audited. |
 | `POST` | `/api/keys/:id/destinations/:destinationId/signing-secret` | Reveal a webhook destination's plaintext HMAC signing secret. Bearer or session auth. Audited. |
 | `POST` | `/api/keys/:id/destinations/:destinationId/rotate-secret` | Rotate a webhook destination's HMAC signing secret and return the new secret once. Bearer or session auth. Audited. |
 | `GET` | `/api/api-keys` | List API keys. Bearer auth. Hashes are never returned; non-admin keys see only themselves. Each row includes its `scope`. |
-| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth. Body: `{ name, is_admin?, scope? }`; plaintext key returned once. Only admins can mint admin keys. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). |
+| `POST` | `/api/api-keys` | Mint a new API key. Bearer auth, **admin-only** (`403` for non-admin keys). Body: `{ name, is_admin?, scope?, owner_api_key_id? }`; plaintext key returned once. `scope` is `full` (default) or `enroll` — see [key scope](#api-key-scope-full-vs-enroll). `owner_api_key_id` applies to enroll keys only: the full key whose fleet the key enrolls for (default: the minting admin). |
 | `DELETE` | `/api/api-keys/:id` | Revoke an API key. Bearer auth. Self-revoke is allowed; revoking others requires admin. |
 | `GET` | `/api/device-profiles` | The device-profile / vector catalog used by `mantis device`. Bearer or session auth. |
-| `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. |
+| `GET` | `/api/audit?limit=&cursor=&since=&event_type=&actor=` | Admin-only audit log. Bearer or session auth. `actor` must be a full UUID (`422` otherwise). |
 | `GET` `HEAD` | `/api/health` | **Public unless gated by your proxy.** Liveness + `SELECT 1` readiness. 200 = app and DB ok, 503 = DB failure. |
 | `GET` `POST` | `/api/cron/notifications?max=<n>` | Notification retry and retention worker endpoint for serverless deployments. Requires `Authorization: Bearer $CRON_SECRET`; returns 401 if `CRON_SECRET` is unset. |
-| `GET` `HEAD` | `/status/:public_id` | **Public.** Uptime-monitor status endpoint. 200 = ok, 503 = tripped, 404 = not monitored / disabled / expired / unknown. Does not record a hit. |
-| `GET` `HEAD` `POST` | `/c/:public_id` | **Public.** Records a hit, returns the configured response. |
+| `GET` `HEAD` | `/status/:public_id.:tag` | **Public.** Uptime-monitor status endpoint; the full URL is the key's `monitor_status_url`. 200 = ok, 503 = tripped. A missing or wrong tag, an unknown, disabled or expired key, and monitoring switched off all return the same empty 404. Does not record a hit. See [Uptime Kuma](https://docs.mantis.privacykey.org/uptime-kuma). |
+| `ANY` | `/c/:public_id[/<any path>]` | **Public.** Records a hit, returns the configured response. Any path after the id and any HTTP method reach the same handler, so bait placed in a base-URL field still fires when a tool appends its own path. |
 | `ANY` | `/inbox/<slug>` | **Dev only.** Captures webhook-style requests when `ENABLE_DEV_INBOX=1`. |
 | `GET` `DELETE` | `/api/inbox` | **Dev only.** Read or clear the in-memory dev inbox when `ENABLE_DEV_INBOX=1`. Bearer or session auth. |
 | `POST` | `/api/wallet/v1/log` | **Public Apple Wallet web service.** Accepts Wallet diagnostics. |
@@ -1550,7 +1579,9 @@ Supported installer `type` values are `shell`, `shell-sudo`,
 Webhook destinations get an HMAC secret. Outbound raw-webhook deliveries include
 `X-Mantis-Timestamp` and `X-Mantis-Signature: sha256=<hex>` over
 `<timestamp>.<json body>`. The plaintext secret is only shown on create, replace,
-explicit reveal, or rotate responses; normal listing returns a fingerprint.
+explicit reveal, or rotate responses; normal listing returns a fingerprint. The
+secret of a [global](https://docs.mantis.privacykey.org/configuration#global-notification-destinations) webhook
+destination is revealed or rotated by an admin on the settings page.
 
 ## API key scope: full vs enroll
 
@@ -1559,10 +1590,14 @@ Every API key carries a `scope`, orthogonal to `is_admin`:
 - **`full`** (default) — behaves as described throughout this page. Subject to the admin / non-admin visibility rules.
 - **`enroll`** — create-only. An enroll key may call **only** `POST /api/keys`. Every other management route (list/read/update/delete keys — including the ones it created — plus `/api/hits/recent`, `/api/api-keys`, the audit log, and any session-reachable route) returns `403 forbidden`, and an enroll key cannot log in to the dashboard. `is_admin: true` together with `scope: "enroll"` is rejected at validation.
 
-Enroll keys are the intended credential for MDM / fleet provisioning: you embed one on every managed machine and accept that a curious user will extract it. An extracted enroll key cannot read hit history, alert routing or signing secrets, and cannot enumerate or list keys — but it is not inert, so size the blast radius before you embed one:
+Enroll keys are the intended credential for MDM / fleet provisioning: you embed one on every managed machine and accept that a curious user will extract it. So an enroll key can only mint a plain tripwire:
 
-- **It can confirm and retrieve any key whose `external_id` it guesses.** A `POST /api/keys` that collides with an existing `external_id` returns that key's trigger URL, memo, `public_id` and expiry (`"reused": true`, HTTP `200`) — see [Idempotent creation](#idempotent-creation) — regardless of which API key created it. `mantis device` derives `external_id`s deterministically as `mantis:device:<os>:<normalized-name>:<slug>`, so an attacker who knows your naming convention can guess a machine's ids and read back that machine's canary URLs, which is exactly what lets an intruder route around the tripwires. Each such claim is recorded in the audit log as `key.claimed`.
-- **It can supply `destinations` on creation**, and Mantis fires the activation ping synchronously — so the key can make your instance POST to an attacker-chosen HTTP(S) endpoint (private, loopback and metadata addresses are rejected unless `ALLOW_PRIVATE_WEBHOOKS=1`) or, if `SMTP_URL` is set, send it mail.
+- **Body.** `memo`, `external_id`, `response_kind` (`gif` or `empty`) and `dedupe_window_seconds` (at most 600). Anything else — `expires_at`, monitor settings, `response_payload`, a redirect / HTML / JSON response, `self_origins`, or an `external_id` in the `mantis:device:` namespace — is refused with `403 forbidden`.
+- **Destinations.** Accepted only when every `channel:target` pair is listed in the server's [`MANTIS_ENROLL_DESTINATIONS`](https://docs.mantis.privacykey.org/configuration#fleet-enrollment); otherwise `403`, before anything is stored or sent. Unset means an enroll key cannot attach destinations at all, and fleet alerts are routed by [global destinations](https://docs.mantis.privacykey.org/configuration#global-notification-destinations). The response never includes activation error text.
+- **Volume.** One enroll key can create at most `MANTIS_ENROLL_KEYS_PER_HOUR` new keys per hour (default 1000); beyond that it gets `429`. Re-claims are not counted.
+- **Fleet.** Each enroll key belongs to one fleet, set when it is minted (`owner_api_key_id`, default: the minting admin). It can re-claim an `external_id` only inside that fleet — see [Idempotent creation](#idempotent-creation).
+
+What an extracted enroll key can still do: create noise keys up to the hourly cap, and recover the trigger URL of a key in its own fleet whose `external_id` it knows or guesses (alert routing is never included, and the memo is `null` unless it created the key). Knowing a machine's trigger URL lets someone fire false alarms or step around the tripwire, so treat serial numbers as guessable and watch the audit log: each such claim is recorded as `key.claimed` with `cross_key: true`.
 
 See the Kandji recipe in the product repo's `deploy/kandji/`.
 
@@ -1573,16 +1608,60 @@ See the Kandji recipe in the product repo's `deploy/kandji/`.
 repeat POST with the same `external_id` returns the **existing** key —
 `"reused": true` with HTTP `200` instead of `201` — rather than minting a
 duplicate. The other body fields (`memo`, `destinations`, …) apply only when the
-row is actually created; a later claim never mutates what the key was first
-configured with. Keys created without an `external_id` are unaffected (unique
+row is actually created; a later claim never changes what an operator
+configured. Keys created without an `external_id` are unaffected (unique
 constraint treats NULLs as distinct).
 
 This is the mechanism the fleet-enrollment flow relies on — one key per machine
 serial, so re-running enrollment on a reimaged machine reuses its key instead of
-littering the list. Enroll-scoped callers (and callers claiming another creator's
-`external_id`) get a reduced response shape — trigger URL and identity only, no
-alert routing or signing secrets. A claim that races a concurrent delete returns
+littering the list. External ids are guessable and unique across the whole
+instance, so a repeat POST only resolves inside the caller's **fleet**:
+
+- **the key's creator** — the key as it could read it anyway, with
+  `"created_by_caller": true`;
+- **an enrollment-scoped key of the same fleet** — the reduced shape: trigger
+  URL, `public_id`, `external_id`, expiry and `disabled`, with `memo` set to
+  `null` unless it created the key. No alert routing, no signing secrets.
+  Audited as `key.claimed` with `cross_key: true`;
+- **an admin** — keys of the operators' own fleet, in full. Adopting a key
+  another fleet created needs `"adopt": true` in the body (audited with
+  `adopted: true`);
+- **anyone else** — `409 conflict` with no key details, audited as
+  `key.claimed` with `denied: true`.
+
+A fleet is all admin keys plus the enroll keys they own, or one non-admin full
+key plus the enroll keys bound to it with `owner_api_key_id`. Enroll keys minted
+before 0.3.0 have no recorded owner and count as the operators'.
+
+A disabled or expired key is never handed back: the claim returns
+`409 conflict`, so enrollment fails visibly instead of arming a device with a
+tripwire that cannot fire. A claim that races a concurrent delete also returns
 `409 conflict`; retry.
+
+One case adds to an existing key: when an enrollment-scoped key re-claims a key
+that an enroll key created, any approved destination in the request that the
+key lacks is attached. A serial claimed early by someone holding the enroll key
+therefore still ends up routed once the real device enrolls.
+
+## Notification rows in hit listings
+
+Every hit returned by `/api/keys/:id/hits` and `/api/hits/recent` carries a
+`notifications` array — one row per destination the hit fanned out to, with
+`channel`, `status`, `attempts`, `max_attempts`, `next_attempt_at`,
+`succeeded_at`, `last_error`, `target` and `destination_scope`.
+
+`destination_scope` is `key` for a destination attached to the key itself,
+`global` for an instance-wide [global destination](https://docs.mantis.privacykey.org/configuration#global-notification-destinations),
+and `unknown` when the destination has since been deleted. **`target` is `null`
+unless the caller may see it**: admins always may; a non-admin key owner sees
+only the targets of the key's own destinations. Global-destination targets are
+Slack / Discord / Teams / Home Assistant webhook URLs configured by an admin —
+they are credentials, so a non-admin never receives them. `last_error` follows
+the same rule: a caller who may not see the target gets the HTTP status only
+(for example `HTTP 500 (details visible to admins)`). The dashboard hit feed and
+`mantis hits` render a placeholder for redacted rows.
+
+A row whose destination was removed before delivery ends as `aborted`.
 
 ## Response kinds for the trigger endpoint
 
@@ -1599,7 +1678,7 @@ alert routing or signing secrets. A claim that races a concurrent delete returns
 ```json
 {
   "type": "mantis.hit",
-  "key": { "id": "...", "public_id": "...", "memo": "...", "url": "..." },
+  "key": { "id": "...", "public_id": "...", "memo": "...", "url": "...", "dashboard_url": "..." },
   "hit": {
     "id": "...",
     "occurred_at": "2026-05-12T10:00:00.000Z",
@@ -1615,6 +1694,8 @@ alert routing or signing secrets. A claim that races a concurrent delete returns
   }
 }
 ```
+
+`key.url` is the trigger URL: requesting it fires the key again, so never render it as a link or let a chat client preview it. Link `key.dashboard_url`, the key's page in the dashboard, instead. Home Assistant payloads carry the same pair as `key_url` and `dashboard_url`, plus the hit's `referer`.
 
 Webhook payloads also include a parsed `host_context` object when the hit came from one of our installer snippets:
 
@@ -1659,7 +1740,8 @@ These are the variables operators usually need to understand.
 ## URLs
 
 - `PUBLIC_BASE_URL` — public origin used when Mantis generates trigger, status, and Wallet callback URLs. Defaults to `http://localhost:3000`.
-- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; if you choose a different path, put a reverse proxy in front that rewrites it to `/c/<id>` on the app.
+- `DASHBOARD_BASE_URL` — origin used for the dashboard links in Slack / Discord / Teams / email alerts and for `dashboard_url` in webhook and Home Assistant payloads. Alerts never link the trigger URL, because following it fires the key. Defaults to `PUBLIC_BASE_URL`, or — when the host split below makes that host public-only — to the first `DASHBOARD_HOSTS` entry on `PUBLIC_BASE_URL`'s scheme and port. Set it when that default is wrong.
+- `MANTIS_PUBLIC_PATH` — trigger path prefix, default `/c`. Changing this changes generated URLs and the public-only host allowlist; the app rewrites `<prefix>/<id>` onto its trigger handler itself, so no reverse-proxy rewrite is needed. Anything under a trigger URL fires the key too — `<prefix>/<id>/<any path>`, any HTTP method, with or without a trailing slash — so bait placed in a base-URL field still registers when a tool appends its own path. Responses under a custom prefix also carry the dashboard's security headers (`X-Frame-Options: DENY`, CSP), which only matters if you embed an `html` response kind in an iframe.
 
 ## Boot and runtime
 
@@ -1684,12 +1766,26 @@ can set a Slack or webhook once and have every key you mint — including
 bulk-created ones — alert you without further setup. A destination listed both
 globally and on a key fires once (the key's own row wins, keeping its signing
 secret and activation history). There is no environment variable or CLI
-subcommand for the global set; it lives only in the admin dashboard.
+subcommand for the global set; it lives only in the admin dashboard. The same
+page shows each global webhook's signing-secret fingerprint and lets an admin
+reveal or rotate the secret, so the receiver can verify deliveries.
+
+A webhook or Home Assistant destination that points back at the Mantis instance
+itself is refused, on a key or globally: delivering to its own trigger URL would
+record every alert as a new hit.
+
+## Fleet enrollment
+
+Enrollment-scoped API keys ship on every managed device, so they can only mint
+plain tripwires — see [key scope](https://docs.mantis.privacykey.org/api#api-key-scope-full-vs-enroll).
+
+- `MANTIS_ENROLL_DESTINATIONS` — destinations an enrollment key may attach when it creates a key: a whitespace-separated list of `channel:target` pairs, e.g. `slack:https://hooks.slack.com/services/T000/B000/XXXX`. Unset (the default) means enrollment keys cannot attach destinations at all; route fleet alerts with a global destination instead. Anything not listed is refused with `403` before it is stored or pinged.
+- `MANTIS_ENROLL_KEYS_PER_HOUR` — new keys one enrollment key may create per hour. Default `1000`; `0` disables the cap. Re-claims of an existing `external_id` are not counted.
 
 ## Proxy and public-only hosts
 
-- `TRUST_PROXY_HEADERS=1` — trust `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, and `x-forwarded-for` for forensic IP logging. Set only behind a proxy that strips and re-injects those headers. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
-- `TRUSTED_IP_HEADER` — pin client-IP extraction to a single header (matched case-insensitively), e.g. `x-real-ip`. By default Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present; behind a non-Cloudflare proxy (nginx, Caddy, Traefik) that sets only `x-real-ip` and doesn't strip an inbound `cf-connecting-ip`, an attacker could forge `cf-connecting-ip` and have it trusted. Pin this to the one header your proxy authoritatively writes so all others are ignored. Only takes effect when `TRUST_PROXY_HEADERS` is on.
+- `TRUST_PROXY_HEADERS=1` — trust a client-IP header for forensic IP logging. Set it only behind a reverse proxy or tunnel, and always together with `TRUSTED_IP_HEADER` below: no proxy overwrites every candidate header, and any it lets through is client-controlled. Auto-enabled on Vercel and in non-production; set `TRUST_PROXY_HEADERS=0` to force it off even there. In production with no trusted proxy (the default), client IPs are recorded as `null` rather than spoofable values, and Mantis logs a one-time startup warning.
+- `TRUSTED_IP_HEADER` — the single header your ingress writes (matched case-insensitively): `cf-connecting-ip` behind Cloudflare or cloudflared, `x-forwarded-for` behind Tailscale serve/Funnel, Fly or Render, `x-real-ip` or `x-forwarded-for` behind nginx / Caddy / Traefik (whichever you configured it to set). Left unset, Mantis tries `cf-connecting-ip`, `x-vercel-forwarded-for`, `x-real-ip`, then `x-forwarded-for` and takes the first present. That order is only safe when your ingress overwrites the first of those it forwards; behind a proxy that writes only `x-forwarded-for` or `x-real-ip`, a client can send its own `cf-connecting-ip` and choose the IP recorded on hits. Mantis logs a one-time warning when headers are trusted without a pin, and ignores a header value that is not an IP literal. The repository's `docker-compose.yml` pins `x-forwarded-for` by default; override it in `.env` for a proxy that writes a different header. Only takes effect when `TRUST_PROXY_HEADERS` is on.
 - `TRUST_PROXY_HOPS` — number of trusted reverse-proxy hops in front of Mantis, default `1` (clamped to 1–16). Only affects `x-forwarded-for` parsing: the client IP is taken this many entries from the right of the chain (your nearest proxy appends the real peer on the right), so a client can't forge it past your proxy. Raise it only if you stack multiple trusted proxies; it has no effect on single-value headers like `cf-connecting-ip` or `x-real-ip`.
 - `FORCE_SECURE_COOKIES` — override the `Secure` flag on the dashboard session cookie. `1` forces it on, `0` forces it off; unset derives it from the request scheme (`X-Forwarded-Proto`, or the RFC 7239 `Forwarded` header's leftmost hop). Set `1` behind a proxy or tunnel that terminates real TLS but sets **neither** scheme header — otherwise the session cookie travels un-`Secure` over genuine HTTPS. Leave it unset for the proxies Mantis documents (Cloudflare, cloudflared, Tailscale, nginx), which all set a scheme header. Don't force it on over plain HTTP: the browser would then never send the cookie back and login would break.
 - `PUBLIC_ONLY_HOSTS` — comma/space-separated hostnames that should expose only public routes: trigger URLs, status URLs, and Wallet callbacks.
@@ -1706,7 +1802,9 @@ subcommand for the global set; it lives only in the admin dashboard.
 ## Retention
 
 Unset retention variables mean retain forever. The notify worker sweeps hourly;
-cron mode runs the same sweep through `/api/cron/notifications`.
+cron mode runs the same sweep, about once an hour, from
+`/api/cron/notifications` — so with the worker off, nothing is deleted unless
+that endpoint is actually being called on a schedule.
 
 - `MANTIS_HIT_RETENTION_DAYS` — delete hits older than N days; notifications cascade.
 - `MANTIS_NOTIFICATION_RETENTION_DAYS` — delete settled notifications older than N days.
@@ -1905,6 +2003,11 @@ API. See [Cloudflare deployment](https://docs.mantis.privacykey.org/deployment/c
 | `cloudflare set-service-auth` | `--client-id <id>` (ends in `.access`), `--client-secret <secret>`, `--client-secret-stdin` (read the secret from stdin, leak-free for CI) |
 | `cloudflare status` | none |
 
+These commands act on the profile chosen with the global `--profile` flag
+(default: the current profile), and `login` and `set-service-auth` print the
+target profile and server before anything is stored. `--base-url` is rejected
+here, because Access settings belong to a profile.
+
 `set-service-auth` configures a Service-Auth client-id + client-secret pair for
 headless CLI usage.
 
@@ -2026,8 +2129,10 @@ Show one key.
 
 ### `mantis last`
 
-Print the id of the most-recently-created key. (Or pass `last` as the `<id>`
-argument on any command.) No flags.
+Print the id of the key this API key created most recently. (Or pass `last` as
+the `<id>` argument on any command.) Keys created in the dashboard or with
+another API key are not considered. Commands that act on a key print which key
+`last` or an id prefix resolved to before they do anything. No flags.
 
 ### `mantis open [id]`
 
@@ -2169,6 +2274,17 @@ Mint one key per host alarm for a machine.
 `--bundle` is the reversible option — you read the script before running it;
 `--install` is the apply-now shortcut for the machine you're on.
 
+Re-running `device new` for the same machine reuses its keys. It refuses to arm
+a reused key that another API key created, or that is disabled or set to
+expire, and says which key that is.
+
+Run the bundle's `install.sh` as the account you want watched; it asks for
+`sudo` itself where an alarm needs root. Run with `sudo`, it installs the
+per-user alarms for the account that called `sudo` (on macOS, failing that, the
+user at the console). On Linux a direct root login installs them for root. Set
+`MANTIS_TARGET_USER=<name>` to choose. `install.ps1` exits non-zero if any
+scheduled task fails to register.
+
 ---
 
 ## Hits & monitoring
@@ -2239,7 +2355,7 @@ notification destinations on a key. Channels: `webhook`, `email`, `slack`,
 | `destinations rotate-secret <key-id> <destination-id>` | `-y, --yes` (skip the confirmation prompt) |
 
 - `add` fires an activation ping when the destination is created.
-- `test` fires a synthetic hit on the key URL and reports which destinations succeeded.
+- `test` fires a synthetic hit on the key URL and reports which destinations succeeded. It is a real hit: it trips an enabled monitor and starts the key's dedupe window.
 - `rotate-secret` rotates the HMAC signing secret on a webhook destination; the new secret is shown **once**.
 
 These subcommands manage destinations **on one key**. To route *every* key's
@@ -2389,7 +2505,7 @@ with format details and automation examples — see
 
 | Flag | What it does |
 |---|---|
-| `--overwrite` | Replace profiles that already exist on this machine (otherwise they're skipped) |
+| `--overwrite` | Replace profiles that already exist on this machine, and stored credentials for a server another profile already uses (otherwise they're skipped) |
 | `--skip-plugins` | Don't re-install plugins from the manifest |
 | `--passphrase-stdin` | Read the passphrase from stdin instead of prompting |
 | `--passphrase-env <var>` | Read the passphrase from the named environment variable |
@@ -2452,7 +2568,7 @@ Export all your CLI profiles and plugin manifest into a passphrase-encrypted fil
 
 The CLI's `config.json` is plain JSON and trivially copyable, but the secrets that actually make it work — `mantis_live_…` API keys, Cloudflare Service-Auth credentials, and edge-worker AES keys — live in the OS keychain and can't be `scp`'d. `mantis backup` and `mantis restore` cover the full set: every profile's config + secrets plus your installed-plugin manifest, packed into a single passphrase-encrypted JSON file.
 
-The resulting file is safe to commit to a private git-crypt repo, attach to a 1Password / Bitwarden / Doppler vault entry, or stash in iCloud / Drive. Lose the passphrase and the contents are unrecoverable, by design.
+Keep the resulting file private: attach it to a 1Password / Bitwarden / Doppler vault entry, or stash it in encrypted storage. It is encrypted, but it holds full API keys, and anyone with a copy can try passphrases offline — so use a strong passphrase and don't commit it to a repository other people can read. `mantis backup` warns when the output path is inside a git work tree. Lose the passphrase and the contents are unrecoverable, by design.
 
 ## Migrating to a new machine
 
@@ -2526,7 +2642,7 @@ The file is written with mode `0600` (owner-only).
 | Flag | What it does |
 |---|---|
 | `<file>` | Required. Path to the bundle produced by `mantis backup`. |
-| `--overwrite` | Replace profiles + keychain entries when names collide with profiles already on the target machine. Default: skip existing, print which were skipped. |
+| `--overwrite` | Replace profiles + keychain entries when names collide with profiles already on the target machine, or when a bundle profile points at a server that already has a different stored credential. Default: skip those, print which were skipped. |
 | `--skip-plugins` | Don't re-install plugins from the manifest. You can run `mantis plugin add` manually later. |
 | `--passphrase-stdin` | Read the passphrase from stdin. |
 | `--passphrase-env <VAR>` | Read the passphrase from the named environment variable. |
@@ -2590,6 +2706,18 @@ Pick the row that matches how each component was installed. After bumping the se
 
 > **Warning**
 >
+> **One-time steps when upgrading the server to ≥ v0.3.0:**
+>
+> - Migration `0008` is applied with the upgrade (`AUTO_MIGRATE=1`, or `pnpm run db:migrate`). It only adds two columns.
+> - Monitor status URLs changed to `/status/<public_id>.<tag>`. Re-point each Uptime Kuma (or other) monitor at the key's new status URL; the old form returns 404. See [Uptime Kuma](https://docs.mantis.privacykey.org/uptime-kuma).
+> - An enrollment key can attach a destination only when it is listed in `MANTIS_ENROLL_DESTINATIONS`. See [Configuration](https://docs.mantis.privacykey.org/configuration#fleet-enrollment).
+> - Upgrade the CLI to 0.3.0 together with the server.
+> - Regenerate and reinstall these snippets: `css-background` (earlier ones usually never fired), Windows device bundles (re-run `install.ps1`), and the Home Assistant receiver (it has a new webhook id; re-register the destination).
+>
+> The full checklist is in the repository's [CHANGELOG](https://github.com/privacykey/mantis/blob/main/CHANGELOG.md).
+
+> **Warning**
+>
 > **One-time step when upgrading to ≥ v0.1.2:** the server now requires `MANTIS_API_KEY_PEPPER`, a base64 secret used as the HMAC key for hashing API keys at rest. Generate one with `openssl rand -base64 32` and set it in your `.env` (or your PaaS secret store) before redeploying. Existing API keys keep working — the verifier accepts the old pre-pepper SHA-256 form and opportunistically upgrades each row on next use. Skip this step and the server will refuse to boot with a clear "Missing required env: MANTIS_API_KEY_PEPPER" message. See [Configuration → Required](https://docs.mantis.privacykey.org/configuration#required) for the full rationale.
 
 | Component | Install method | Update |
@@ -2602,7 +2730,7 @@ Pick the row that matches how each component was installed. After bumping the se
 | **CLI** | Direct tarball from [releases](https://github.com/privacykey/mantis/releases?q=cli-v) | Download the new `mantis-<platform>.tar.gz`, extract, replace the binary on your `$PATH`. |
 | **Edge worker** | `mantis-edge/` via wrangler | `git pull && corepack enable && pnpm install && pnpm --filter @mantis/edge run deploy` — secrets (`MANTIS_EDGE_KEY`, `MANTIS_EDGE_WEBHOOK_ALLOWLIST`) persist across deploys, no re-keying needed. |
 | **IoT helper** | `iot-helper/` direct | `git pull && corepack enable && pnpm install && pnpm --filter @mantis/iot-helper run check` — then restart your `mantis-iot-helper.js` process. |
-| **Host installers** | Per-machine snippets from `mantis install …` | Existing snippets keep firing as long as the trigger URL hasn't changed — only re-run `mantis install <key-id> --type <type> --out <path>` when a release note flags a snippet-format change. |
+| **Host installers** | Per-machine snippets from `mantis install …` | Existing snippets keep firing as long as the trigger URL hasn't changed — only re-run `mantis install <key-id> --type <type> --out <path>` when a release note flags a snippet-format change (0.3.0 does, for the snippets listed above). |
 
 To get notified of new releases, **Watch → Custom → Releases** on the GitHub repo — `cli-v*` tags publish CLI binaries, plain `v*` tags publish server releases.
 
@@ -2617,6 +2745,22 @@ Published Mantis releases — CLI and server — what changed and where the full
 > binaries, plain `v*` tags publish server releases. After updating, run `mantis doctor`
 > to confirm CLI/server compatibility, and see [Updating](https://docs.mantis.privacykey.org/updating) for the per-component
 > update commands.
+
+## Server v0.2.0
+
+5 September 2026
+
+Security hardening release following the pre-launch audit (#86). Hit listings no longer expose admin-configured global webhook URLs to non-admin key owners, `external_id` claims by unrelated full keys are refused, installer templates neutralise hostile memos, API-key minting is admin-only, and `MANTIS_PUBLIC_PATH` finally routes.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/v0.2.0)
+
+## CLI v0.2.1
+
+5 September 2026
+
+Standalone CLI binaries for macOS and Linux on arm64 / x86_64. Each binary is built on its own native runner so the bundled native modules (`@napi-rs/keyring`) match the target.
+
+[Full release notes →](https://github.com/privacykey/mantis/releases/tag/cli-v0.2.1)
 
 ## CLI v0.2.0
 
@@ -2688,12 +2832,12 @@ and fire when the URL inside them is *used*, not when the file is opened.
 
 | Format | Mechanism | Best in | Notes |
 |---|---|---|---|
-| `.docx` | External-image relationship in OOXML | Word, LibreOffice Writer | Most reliable — fires on render, also from email attachments after "Enable Editing" |
-| `.xlsx` | Same external-image trick, attached to a worksheet drawing | Excel, LibreOffice Calc | Identical reliability to DOCX |
+| `.docx` | External-image relationship in OOXML | Word, LibreOffice Writer | Fires when Word loads the document's external content. A downloaded copy opens in Protected View first and does not fire until "Enable Editing" |
+| `.xlsx` | Same external-image trick, attached to a worksheet drawing | Excel, LibreOffice Calc | Same as DOCX: Protected View and the external-content prompt can delay or block the fetch |
 | `.pptx` | Same external-image trick on slide 1 | PowerPoint, Keynote (some), LibreOffice Impress | Same as above |
 | `.pdf` | **Combo**: `/OpenAction → /URI` + clickable `/Link` annotation | Adobe Reader, Foxit, most enterprise PDF readers | Less reliable — Chrome's PDFium viewer doesn't fire OpenAction; macOS Preview doesn't either. The clickable link covers the "user reads + clicks" case in those viewers. |
 | `.rtf` | `INCLUDEPICTURE` field referencing the trigger URL | Word, WordPad, TextEdit | Beacons on open like `.docx`, but as plain text it survives being opened in a text editor, and WordPad/TextEdit render it without the Protected-View banner `.docx` inherits from the Mark-of-the-Web. The `\d` switch re-fetches on every open, so a re-opened file fires again. |
-| `.zip` (`folder`) | Honey-directory bundle of 9 bait files | Shared drives, unpacked project folders | Each file in the extracted folder triggers the same key |
+| `.zip` (`folder`) | Honey-directory bundle of 9 bait files | Shared drives, unpacked project folders | Each file triggers the same key when it is opened or its URL is followed; listing the folder fires nothing |
 | `.pdf` (`nfc-label`) | Printable QR/NFC sticker label | Physical tags, asset labels | The PDF does not fire by itself; the scan/tap opens the key URL |
 | `.pkpass` (`apple-wallet`) | Signed Apple Wallet pass with web-service callbacks | iPhone Wallet | Requires Wallet config; install, uninstall, and fetch callbacks record hits |
 | `.svg` | `<image href>` referencing the trigger URL | Browsers, some image viewers, photo libraries | Apps that raster-thumbnail may not fire on preview — opening the original always does |
@@ -2720,12 +2864,12 @@ cookie jar.
 
 | Format | Saved as | Fires when |
 |---|---|---|
-| `cookies` | `cookies.txt` | A stolen jar is replayed. The bait cookie is path-scoped to the canary, so curl / wget / yt-dlp or any "export cookies" tool that reloads it hits the URL exactly. |
-| `bookmarks` | `bookmarks.html` | The file is opened in a browser (the bait's `ICON_URI` is fetched on render) **or** the bait bookmark — an internal VPN portal / admin console — is clicked. |
-| `env` | `.env` | A tool reads the file and resolves `API_BASE_URL` against the canary. (`DEPLOY_WEBHOOK_URL` points at `/hooks/deploy` on the same host, which has no route — it is plausible filler, not a second trigger.) |
-| `aws-credentials` | `credentials` | The AWS CLI or an SDK is pointed at the profile — it honours the profile's `endpoint_url`, so calls resolve against the canary rather than AWS. |
-| `netrc` | `.netrc` | curl, wget, git or ftp authenticate to the canary host. `.netrc` is auto-consumed, so this fires without the file ever being opened. |
-| `kubeconfig` | `config` | Someone reads the file and curls the `server:` URL to see what cluster it is. (kubectl appends its own API paths and 404s, so a real `kubectl get pods` won't register — this catches the read.) |
+| `cookies` | `cookies.txt` | Someone requests the bait cookie's URL. Loading the jar issues no request by itself; the bait entry is scoped to the canary's host and exact path, which is where someone trying the stolen session will send it. |
+| `bookmarks` | `bookmarks.html` | The bait bookmark — an internal VPN portal / admin console — is clicked. Viewing the file fetches nothing; a browser may also request the bookmark's icon URL when the file is imported. |
+| `env` | `.env` | A tool reads the file and calls `API_BASE_URL` — including an app that joins its own API path onto it, since any path under a trigger URL fires. `DEPLOY_WEBHOOK_URL` sits under the trigger URL too. |
+| `aws-credentials` | `credentials` | The AWS CLI or an SDK is pointed at the profile — it honours the profile's `endpoint_url`, so calls resolve against the canary rather than AWS, whatever bucket, object or operation path they append. |
+| `netrc` | `.netrc` | Someone requests the restore URL in the file's header comment. It does not fire on its own: `.netrc` entries match on host only, so a tool that reads the file sends the bait login to the canary host but not to this key's path. |
+| `kubeconfig` | `config` | Any request under the `server:` URL: someone who curls it to see what cluster it is, or kubectl itself, which appends its own API paths (and then fails on the non-Kubernetes reply). |
 | `ovpn` | `<memo>.ovpn` | Someone follows the profile-update URL in the file. OpenVPN speaks its own protocol, so pointing the client at an HTTP canary won't fire — this is discovery bait, a weaker trigger than a document beacon, and the dashboard preset says so. |
 | `rdp` | `<memo>.rdp` | Someone follows the `workspacefeedurl` in the file. Like `.ovpn`, RDP won't beacon on its own; the hit comes when a human opens the URL. |
 
@@ -2803,7 +2947,7 @@ Source: https://docs.mantis.privacykey.org/honey-directory
 
 Create a ZIP bundle of bait files wired to the same Mantis key.
 
-A `.zip` bundle of pre-baited files, all wired to the same key. Drop the extracted folder on a shared drive; any file inside that gets opened, double-clicked, or `cat`'d fires the mantis.
+A `.zip` bundle of pre-baited files, all wired to the same key. Drop the extracted folder on a shared drive; the mantis fires when someone opens one of the documents, double-clicks a shortcut, or follows the URL written in a text file.
 
 ```bash
 mantis new "Q4 Leadership Plans" \
@@ -2818,17 +2962,17 @@ The unzipped folder contains 9 bait files, each independently triggering the sam
 
 | File | Trigger when |
 |---|---|
-| `Q4 Salary Review.xlsx` | Opened in Excel / LibreOffice Calc |
-| `Restructuring Memo - Draft.docx` | Opened in Word / LibreOffice Writer |
-| `All-Hands Q4 Plans.pptx` | Opened in PowerPoint / LibreOffice Impress |
+| `Q4 Salary Review.xlsx` | Opened in Excel / LibreOffice Calc (Protected View and external-content prompts can hold the fetch back) |
+| `Restructuring Memo - Draft.docx` | Opened in Word / LibreOffice Writer (same caveat) |
+| `All-Hands Q4 Plans.pptx` | Opened in PowerPoint / LibreOffice Impress (same caveat) |
 | `Layoff Schedule 2026.pdf` | Opened in Adobe Reader (`/OpenAction`) or clicked link |
-| `passwords.txt` | Cat'd / read — has fake credentials + URL line at the bottom |
-| `database-credentials.txt` | Same pattern — fake DB creds + URL |
-| `README.txt` | Reading the directory's "what is this" file |
+| `passwords.txt` | Someone follows the URL line at the bottom, under the fake credentials. Reading the file alone fires nothing |
+| `database-credentials.txt` | Same pattern — fake DB creds + URL to follow |
+| `README.txt` | Someone follows the URL in the directory's "what is this" file |
 | `Open in Browser.url` | Double-clicked on Windows (Internet Shortcut) |
 | `Latest Version.webloc` | Double-clicked on macOS (URL bookmark) |
 
-Note: this does **not** fire automatically when someone browses the folder in Finder/Explorer — that requires DNS infrastructure (a future stage). What it *does* give you is high-surface honeypot detection: a curious user spelunking the directory will open at least one of those files, and any of them triggers the alert.
+Note: this does **not** fire automatically when someone browses the folder in Finder/Explorer — that requires DNS infrastructure (a future stage). What it *does* give you is high-surface honeypot detection: a curious user spelunking the directory is likely to open one of the documents or follow one of the URLs, and any of those triggers the alert.
 
 Fake credentials in `passwords.txt` / `database-credentials.txt` use AWS's and Stripe's documented example keys (`AKIAIOSFODNN7EXAMPLE`, `sk_live_4eC39HqLyjWDarjtT1zdp7dc`) — publicly known fakes, not real credentials anywhere.
 
@@ -2869,7 +3013,9 @@ mantis install <key-id> --type macos-login --out ~/Library/LaunchAgents/com.mant
 #         GET /api/keys/<id>/install?type=<type>&format=json  for metadata
 ```
 
-The snippets are designed to be unobtrusive — backgrounded execution, 3–10s timeouts, output redirected to `/dev/null`. They won't slow your shell startup or hang your boot if the mantis server is unreachable.
+The snippets are designed to be unobtrusive — backgrounded execution, 3–10s timeouts, output redirected to `/dev/null`. They won't slow your shell startup or hang your boot if the mantis server is unreachable. Boot and wake alarms get one chance per event, often before the network is back, so they retry up to five times over about a minute.
+
+On Windows, the logon task runs as the Users group, in the session of whichever account logs on. The wake and network tasks run as LOCAL SERVICE, so they fire with nobody logged on.
 
 **Example: alert me on every SSH login**
 
@@ -2901,7 +3047,7 @@ In addition to host-event installers, the same `/install` endpoint generates two
 
 | Type | Fires when | Use case |
 |---|---|---|
-| `css-background` | The CSS is rendered anywhere (browser loads the URL as a background image) | Detect when someone copies your stylesheet to their own site. **Fires on your own site too** — distinguish by Referer header. |
+| `css-background` | The CSS is rendered anywhere (browser loads the URL as a background image) | Detect when someone copies your stylesheet to their own site. **Fires on your own site too** — declare your site's origin on the key so those hits are ignored. |
 | `js-clone-detector` | The script runs on a hostname other than the expected one (or any subdomain of it) | Detect site cloning / phishing copies. Includes a runtime hostname check so it does **not** fire on your real site. |
 
 ```bash
@@ -2914,9 +3060,11 @@ mantis install <key-id> --type js-clone-detector --hostname example.com --out ./
 
 Both are also visible as tabs ("web CSS", "web JS") on the key detail page in the dashboard, with the JS tab exposing an inline hostname input field. The dashboard tab regenerates the snippet whenever you change the hostname.
 
-The CSS uses partial escape-sequence obfuscation on the URL (`\6c` for `l`, etc.) so the canary URL is less obvious to a casual reader of the stylesheet — browsers parse it identically.
+Your own site loads the CSS on every page view. Add your site's origin (for example `https://www.example.com`) under "your own site" on the key page, or as `self_origins` in the API. Hits whose Referer comes from those origins are ignored, so your own visitors can't occupy the dedupe window and hide a cloned site's hit. This needs your pages to send at least an origin Referer — the browser default does; `Referrer-Policy: no-referrer` or `same-origin` does not — and a clone that hot-links your stylesheet instead of copying it is not detected.
 
-The JS snippet sends explicit `?l=<location>&r=<referrer>` query params alongside the canary URL so you can identify the cloning site even when the Referer header is stripped (strict referrer policies, mixed-protocol downgrades, etc.).
+The CSS uses partial escape-sequence obfuscation on the URL (`\00006c` for `l`, etc.) so the canary URL is less obvious to a casual reader of the stylesheet. Snippets generated before 0.3.0 used short escapes that usually decoded to a different URL and never fired — regenerate and re-paste them.
+
+The JS snippet sends explicit `?l=<location>&r=<referrer>` query params alongside the canary URL so you can identify the cloning site even when the Referer header is stripped (strict referrer policies, mixed-protocol downgrades, etc.). They are stored with the hit as `x-mantis-page-url` and `x-mantis-page-referrer`.
 
 ## Physical snippets (NFC)
 
@@ -2971,7 +3119,9 @@ Every hit then POSTs a `mantis.hit` JSON payload (memo, IP, user-agent, and the
 full `host_context`) to that webhook. The target URL must end in
 `/api/webhook/<id>`. To scaffold the HA side, generate a ready-to-paste
 automation skeleton — it listens on the webhook, drops the activation ping, and
-shows example actions (switch toggle, mobile push, logbook entry):
+shows example actions (switch toggle, mobile push, logbook entry). The file
+carries an unguessable webhook id; treat it like a secret, because it is the
+only credential between Mantis and Home Assistant:
 
 ```bash
 mantis install <key-id> --type homeassistant-receiver --out mantis-ha-receiver.yaml
@@ -2979,7 +3129,13 @@ mantis install <key-id> --type homeassistant-receiver --out mantis-ha-receiver.y
 
 If Mantis reaches HA over a private/Tailscale address, the SSRF guard blocks it
 unless you set `ALLOW_PRIVATE_WEBHOOKS=1` (an instance-wide switch — prefer
-restricting egress at the network layer).
+restricting egress at the network layer). A refused destination always reports
+"destination refused: it does not resolve to a public address"; the server log
+has the reason.
+
+Receivers generated before 0.3.0 used a webhook id derived from the key id
+(`mantis-<8 hex>`). Generate the file again and re-register the destination to
+move to an unguessable id.
 
 For devices that do not expose useful webhooks, [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) can watch LAN neighbor tables and log files, then fire the same Mantis URL for unexpected online/login events.
 
@@ -2990,7 +3146,7 @@ Each installer sends `X-Mantis-*` headers alongside the hit, which the server pa
 | Header | Set by | Useful for |
 |---|---|---|
 | `X-Mantis-Source` | every installer or `?src=` helper | which installer fired (shell / shell-sudo / macos-login / macos-boot / macos-wake / macos-network / linux-boot / linux-wake / linux-network / windows-logon / windows-wake / windows-network / nfc / homeassistant / scrypted / iot-network / iot-log / wallet-installed / wallet-uninstalled / wallet-fetched) |
-| `X-Mantis-User` | `shell`, `shell-sudo`, `macos-login`, `macos-network`, `macos-wake`, `windows-logon`, `windows-wake`, `windows-network` | OS account |
+| `X-Mantis-User` | `shell`, `shell-sudo`, `macos-login`, `macos-network`, `macos-wake`, `windows-logon` | OS account |
 | `X-Mantis-Host` | every installer | which of your machines |
 | `X-Mantis-SSH-Client` | `shell`, `shell-sudo` (when SSH'd in) | **the SSH client's IP** |
 | `X-Mantis-SSH-Connection` | `shell`, `shell-sudo` (when SSH'd in) | full sshd connection tuple |
@@ -3004,7 +3160,7 @@ Each installer sends `X-Mantis-*` headers alongside the hit, which the server pa
 | `X-Mantis-Area` | Home Assistant / Scrypted | room/area |
 | `X-Mantis-Iot-Mac` / `X-Mantis-Iot-Ip` | IoT helper | observed MAC/IP |
 
-(Boot-time installers don't include `X-Mantis-User` because no user is logged in yet.)
+(Boot-time installers don't include `X-Mantis-User` because no user is logged in yet. The Windows wake and network tasks run as LOCAL SERVICE, not as a person, and don't send it either.)
 
 The big win is `$SSH_CLIENT` — when someone SSHes into your machine and the shell snippet fires, the mantis records the **SSH client's IP**, not just the machine's own public IP. The dashboard surfaces this prominently as `← <client-ip>` next to the user/host context. The CLI shows the same:
 
@@ -3024,7 +3180,9 @@ Use Mantis status URLs with Uptime Kuma notification channels.
 
 Uptime Kuma integration lets you piggyback on [Uptime Kuma](https://github.com/louislam/uptime-kuma)'s 80+ notification integrations when you prefer status-monitor fan-out over mantis's built-in notification destinations.
 
-The mechanic: every key has a per-key *status URL* at `/status/<public_id>` that flips between OK (HTTP 200) and tripped (HTTP 503) when the mantis fires. Point a Uptime Kuma HTTP(s) monitor at that URL — Kuma detects the status code or body change and fires its configured notifications.
+The mechanic: every monitored key has a *status URL*, `/status/<public_id>.<tag>`, that flips between OK (HTTP 200) and tripped (HTTP 503) when the mantis fires. Point a Uptime Kuma HTTP(s) monitor at that URL — Kuma detects the status code or body change and fires its configured notifications.
+
+Copy the status URL from the key's monitor card in the dashboard, from `mantis monitor`, or from `monitor_status_url` in the API. The tag is derived from a server secret, so the status URL cannot be worked out from a trigger URL: someone who finds the bait cannot use it to check whether it has been noticed.
 
 ## Modes
 
@@ -3039,12 +3197,12 @@ The mechanic: every key has a per-key *status URL* at `/status/<public_id>` that
 ```bash
 # 1. Pick a key and enable monitoring
 mantis monitor <key-id> --mode latch
-#   → status URL: http://mantis.example.com/status/<public_id>
+#   → status URL: http://mantis.example.com/status/<public_id>.<tag>
 #   → current:    ok
 
 # 2. In Uptime Kuma → Add new monitor:
 #      Monitor type:        HTTP(s)
-#      URL:                 http://mantis.example.com/status/<public_id>
+#      URL:                 the status URL printed in step 1
 #      Heartbeat Interval:  30s (or longer; Kuma minimum 20s)
 #      Status code accepted: 200
 #      → Save and attach your preferred notifications
@@ -3061,19 +3219,20 @@ mantis reset <key-id>   # in latch mode; window mode auto-resets
 
 ## Status endpoint behavior
 
-| Key state | `GET /status/<public_id>` |
+| Request | Response |
 |---|---|
-| Doesn't exist | `404` `{"error":"not_monitored"}` |
-| `monitor_mode = off` | `404` `{"error":"not_monitored"}` (same as nonexistent — no info leak) |
-| Disabled or expired | `404` `{"error":"not_monitored"}` (Uptime Kuma won't keep alerting on a key you've shut down) |
-| Active, no trip | `200` `{"status":"ok","mode":"latch"\|"window"}` |
-| Active, tripped | `503` `{"status":"tripped","tripped_at":"<iso>","mode":...}` |
+| Status URL of an active key, no trip | `200` `{"status":"ok"}` |
+| Status URL of an active key, tripped | `503` `{"status":"tripped"}` |
+| Anything else under `/status/` — no tag or a wrong one, a key that doesn't exist, `monitor_mode = off`, a disabled or expired key | `404` with an empty body |
 
-All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
+Every "nothing to read here" case gets the same empty 404, so the endpoint neither confirms that a key exists nor keeps Uptime Kuma alerting on a key you've shut down. All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
+
+When and how a key tripped (`tripped_at`, mode, window) is not on the public URL. Read it with `mantis status <key-id>` or the owner-only `GET /api/keys/<id>/monitor`.
 
 ## Notes
 
-- Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — `/status/<public_id>` is a separate read-only reflection of state.
+- Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — the status URL is a separate read-only reflection of state.
+- **Upgrading from before 0.3.0:** status URLs used to be `/status/<public_id>`. That form now returns 404, so re-point each monitor at the key's new status URL. Rotating `MANTIS_API_KEY_PEPPER` changes every status URL.
 - Uptime Kuma is optional. The status URL is plain HTTP(s); any monitor that watches for status-code or body changes (e.g., Pingdom, BetterUptime, healthchecks.io, your own cron) works.
 - In `latch` mode, switching to `off` then back to `latch` does not lose trip state — it's derived from `hits` filtered by `monitor_reset_at`.
 
@@ -3086,15 +3245,17 @@ Understand hit deduplication, notification retries, worker mode, and bot parsing
 
 Each key has a `dedupe_window_seconds` (default **60**). Repeat hits to the same key within that window are still recorded (so forensics are intact), but they are marked `is_duplicate: true` and don't fire notifications. Set to `0` to disable.
 
+A web canary planted on your own pages (CSS background, tracking pixel) fires on every page view. Declare your site's origins on the key — "your own site" on the key page, or `self_origins` in the API — and hits whose Referer comes from them are not recorded, so your own visitors cannot occupy the dedupe window ahead of a cloned site.
+
 ## Trigger and Wallet flood guards
 
-Public trigger requests are rate-limited per IP (when a trusted client IP exists) and then per key, at 120/minute, by an in-memory limiter. Over-cap requests still return the key's normal response but skip the record-and-notify path, so one flooded canary can't blind another or drown your notifications — and a missing client IP fails open per-IP rather than collapsing every canary into one shared bucket. Apple Wallet callbacks (pass fetch, registration) share the trigger dedupe window plus a per-key/IP 60/minute cap, because a `.pkpass` embeds a long-lived auth token any holder could loop into a notification flood. These two guards use the per-process in-memory limiter; the cross-instance Postgres-backed limiter is reserved for auth/login throttling (see [operational notes](https://docs.mantis.privacykey.org/operational-notes)).
+Public trigger requests are rate-limited per key — per key and client IP when a trusted client IP exists — at 120/minute, by an in-memory limiter. Over-cap requests still return the key's normal response but skip the record-and-notify path, so one flooded canary can't blind another or drown your notifications. Nothing is shed by client IP alone before the key is looked up: junk requests from an address cannot silence the canaries that fire from that same address (an intruder and a monitored host behind one NAT, for example). Apple Wallet callbacks (pass fetch, registration) share the trigger dedupe window plus a per-key/IP 60/minute cap, because a `.pkpass` embeds a long-lived auth token any holder could loop into a notification flood. These two guards use the per-process in-memory limiter; the cross-instance Postgres-backed limiter is reserved for auth/login throttling (see [operational notes](https://docs.mantis.privacykey.org/operational-notes)).
 
 ## Notification retry queue
 
 On each hit, notifications are enqueued for that key's own destinations **plus** every instance-wide [global destination](https://docs.mantis.privacykey.org/configuration#global-notification-destinations) (`key_id IS NULL`, configured at `/settings/notifications`). A destination that appears in both sets is sent once, de-duplicated on `(channel, target)` with the key's own row winning so its signing secret and activation history are used — a key with no destinations of its own still alerts if a global one exists.
 
-Notifications are inserted into a `notifications` table on hit. A background worker claims pending rows (`FOR UPDATE SKIP LOCKED` — safe for multiple instances), attempts delivery with a 5s timeout, and on failure schedules the next attempt with exponential backoff. Status (`pending` / `in_flight` / `succeeded` / `failed` / `aborted`) is surfaced in the dashboard, CLI (`mantis hits <id>`), and API (`GET /api/keys/<id>/hits`).
+Notifications are inserted into a `notifications` table on hit. A background worker claims pending rows (`FOR UPDATE SKIP LOCKED` — safe for multiple instances), attempts delivery with a 5s timeout, and on failure schedules the next attempt with exponential backoff. Removing a destination aborts its queued and retrying deliveries. Status (`pending` / `in_flight` / `succeeded` / `failed` / `aborted`) is surfaced in the dashboard, CLI (`mantis hits <id>`), and API (`GET /api/keys/<id>/hits`).
 
 **Worker mode** (default for non-Vercel deployments):
 - `instrumentation.ts` starts the worker on boot. Disable with `RUN_NOTIFY_WORKER=0`.
@@ -3114,7 +3275,8 @@ Notifications are inserted into a `notifications` table on hit. A background wor
 Both worker mode and cron mode run the same retention sweep. If
 `MANTIS_HIT_RETENTION_DAYS`, `MANTIS_NOTIFICATION_RETENTION_DAYS`,
 `MANTIS_AUDIT_RETENTION_DAYS`, or `MANTIS_SESSION_RETENTION_DAYS` are set,
-old rows are purged during the hourly worker loop or the cron invocation. The
+old rows are purged during the hourly worker loop or, in cron mode, about once
+an hour from the cron invocation. The
 sweep also deletes expired `rate_limits` rows (window older than 1 day)
 on every run regardless of retention configuration, so the limiter table — whose
 keys embed attacker-rotatable IPs — can't grow without bound.
@@ -3131,8 +3293,10 @@ How the default single-user operator model works in Mantis.
 Mantis is single-user out of the box. The first API key minted on a fresh
 deploy is automatically `is_admin = true` (the bootstrap path sets the flag).
 That key is the operator: it sees and manages every key on the instance.
-Additional API keys created later default to **non-admin** — they can only
-see and manage the keys they created themselves.
+Additional API keys are minted by an admin (`POST /api/api-keys` is
+admin-only) and default to **non-admin** — they can only see and manage the
+keys they created themselves, and their hit history shows the key's own
+notification targets but not the admin's global destinations.
 
 If you only ever mint one API key for your deploy you'll never notice the
 distinction; the schema is shaped that way so it's easy to later promote a
@@ -3150,12 +3314,15 @@ destination-secret / wallet-config events across the instance.
 `{ scope }`, default `full`). A `full` key behaves as described above. An
 `enroll` key is **create-only**: it can call only `POST /api/keys`, and gets
 `403` on every other route — it cannot list keys, read hit history, read alert
-routing or signing secrets, or log in to the dashboard. The one thing it can
-read back is a key it can name: re-posting an `external_id` that already exists
-returns that key — trigger URL, memo, `public_id`, expiry — no matter which API
-key created it. So an enroll key is safe to embed on managed machines only to
-the extent your `external_id`s are hard to guess; `mantis device` derives them
-deterministically from the machine name. `is_admin` and `enroll`
+routing or signing secrets, or log in to the dashboard. What it creates is a
+plain tripwire: it cannot set an expiry, monitor settings or a redirect / HTML
+/ JSON response, and it can attach only destinations an admin approved in
+`MANTIS_ENROLL_DESTINATIONS`. The one thing it can read back is a key in its
+own fleet that it can name: re-posting an `external_id` that already exists
+returns that key's trigger URL, `public_id` and expiry (the memo is `null`
+unless it created the key, and alert routing is never included), audited as
+`key.claimed` with `cross_key: true`. A key from another fleet gets `409`
+instead, as does a full-scope key that did not create the key. `is_admin` and `enroll`
 are mutually exclusive. See [key scope in the HTTP
 API](https://docs.mantis.privacykey.org/api#api-key-scope-full-vs-enroll).
 
@@ -3169,8 +3336,8 @@ Implementation notes for key hashing, disabled-key behavior, and worker mode.
 - **Notifications use a Postgres-backed queue.** Public trigger requests enqueue notification rows after the response path; a worker claims pending rows with `FOR UPDATE SKIP LOCKED`, sends them, and retries failures with backoff. The worker starts automatically on non-Vercel deployments. On Vercel or other serverless hosts, use `/api/cron/notifications` with `CRON_SECRET`.
 - **Operator secrets can be encrypted at rest.** Set `MANTIS_SECRET_KEY` (AES-256-GCM, `openssl rand -base64 32`) to envelope-encrypt webhook HMAC signing secrets and the Apple Wallet auth secret + cert passphrase in the database, so a DB-only leak yields no usable secrets. Unset = today's plaintext-at-rest behavior; existing rows are read transparently and migrate to ciphertext the next time a signing secret is rotated (a legacy DB wallet config can't be re-saved — clear it from `/settings/wallet` instead). See [Configuration](https://docs.mantis.privacykey.org/configuration#required).
 - **API-key auth failures are rate-limited.** Repeated failed bearer auth is throttled per client IP via a Postgres-backed fixed-window limiter (60/min) and returns `429` instead of `401` to blunt brute force; a successful auth never touches the limiter. The dashboard login action applies the same per-IP throttle to *failed* logins only (10/min), and only when a trusted client IP is available — so a flood of bad attempts can never lock out a valid key or the operator. The shared `rate_limits` table makes the cap hold across instances and serverless cold starts; the limiter fails open on a DB error.
-- **Alert payloads escape attacker-controlled values.** The hit IP, User-Agent, key memo, and the `host_context` parsed from `X-Mantis-*` headers are escaped before they're interpolated into Slack / Discord / Teams messages, so a canary tripper can't inject phishing links, channel mentions, or spoofed formatting into your alerts. The edge worker carries the same escapers and additionally drops the request query string from alert links.
-- **Outbound webhooks are SSRF-guarded.** Webhook / Slack / Discord / Teams deliveries enforce `http(s)`-only and refuse targets that resolve to RFC1918, loopback, link-local, or cloud-metadata (`169.254.169.254`) addresses, don't follow redirects, and re-validate the resolved address at connect time to close the DNS-rebinding window. Set `ALLOW_PRIVATE_WEBHOOKS=1` only when your webhook target is intentionally on the same LAN.
+- **Alert payloads escape attacker-controlled values.** The hit IP, User-Agent, key memo, and the `host_context` parsed from `X-Mantis-*` headers are escaped before they're interpolated into Slack / Discord / Teams messages, so a canary tripper can't inject phishing links, channel mentions, or spoofed formatting into your alerts. Long values are truncated, so an oversized header cannot make a chat platform reject the alert. Chat and email alerts link the key's dashboard page and never the trigger URL, because following that link would fire the key again. The edge worker carries the same escapers and names the canary by a short URL fragment instead of a link.
+- **Outbound webhooks are SSRF-guarded.** Webhook / Slack / Discord / Teams deliveries enforce `http(s)`-only and refuse targets that resolve to RFC1918, loopback, link-local, or cloud-metadata (`169.254.169.254`) addresses, don't follow redirects, and re-validate the resolved address at connect time to close the DNS-rebinding window. A destination that points back at the Mantis instance itself is refused too. Every refusal reports the same message; the reason is in the server log. Set `ALLOW_PRIVATE_WEBHOOKS=1` only when your webhook target is intentionally on the same LAN.
 
 # Dev inbox
 Source: https://docs.mantis.privacykey.org/dev-inbox
@@ -3185,6 +3352,8 @@ A built-in webhook capture, only enabled with `ENABLE_DEV_INBOX=1`:
 - `DELETE /api/inbox` — clear the buffer. Requires an API key or dashboard session.
 
 The `/inbox/<slug>` capture endpoint is unauthenticated by design so it can receive webhooks, but reading or clearing the captured buffer requires operator auth.
+
+Credential headers on a captured request — `Cookie`, `Authorization`, API-key and token headers — are stored as `[redacted]`. The inbox shares the dashboard's origin, so a browser landing on it would otherwise leave the operator's session cookie in the buffer.
 
 Use it as your webhook target while developing, instead of webhook.site. State is in-memory only — it resets when the server restarts. Do not expose it in production.
 

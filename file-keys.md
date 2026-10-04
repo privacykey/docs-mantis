@@ -12,12 +12,12 @@ and fire when the URL inside them is *used*, not when the file is opened.
 
 | Format | Mechanism | Best in | Notes |
 |---|---|---|---|
-| `.docx` | External-image relationship in OOXML | Word, LibreOffice Writer | Most reliable — fires on render, also from email attachments after "Enable Editing" |
-| `.xlsx` | Same external-image trick, attached to a worksheet drawing | Excel, LibreOffice Calc | Identical reliability to DOCX |
+| `.docx` | External-image relationship in OOXML | Word, LibreOffice Writer | Fires when Word loads the document's external content. A downloaded copy opens in Protected View first and does not fire until "Enable Editing" |
+| `.xlsx` | Same external-image trick, attached to a worksheet drawing | Excel, LibreOffice Calc | Same as DOCX: Protected View and the external-content prompt can delay or block the fetch |
 | `.pptx` | Same external-image trick on slide 1 | PowerPoint, Keynote (some), LibreOffice Impress | Same as above |
 | `.pdf` | **Combo**: `/OpenAction → /URI` + clickable `/Link` annotation | Adobe Reader, Foxit, most enterprise PDF readers | Less reliable — Chrome's PDFium viewer doesn't fire OpenAction; macOS Preview doesn't either. The clickable link covers the "user reads + clicks" case in those viewers. |
 | `.rtf` | `INCLUDEPICTURE` field referencing the trigger URL | Word, WordPad, TextEdit | Beacons on open like `.docx`, but as plain text it survives being opened in a text editor, and WordPad/TextEdit render it without the Protected-View banner `.docx` inherits from the Mark-of-the-Web. The `\d` switch re-fetches on every open, so a re-opened file fires again. |
-| `.zip` (`folder`) | Honey-directory bundle of 9 bait files | Shared drives, unpacked project folders | Each file in the extracted folder triggers the same key |
+| `.zip` (`folder`) | Honey-directory bundle of 9 bait files | Shared drives, unpacked project folders | Each file triggers the same key when it is opened or its URL is followed; listing the folder fires nothing |
 | `.pdf` (`nfc-label`) | Printable QR/NFC sticker label | Physical tags, asset labels | The PDF does not fire by itself; the scan/tap opens the key URL |
 | `.pkpass` (`apple-wallet`) | Signed Apple Wallet pass with web-service callbacks | iPhone Wallet | Requires Wallet config; install, uninstall, and fetch callbacks record hits |
 | `.svg` | `<image href>` referencing the trigger URL | Browsers, some image viewers, photo libraries | Apps that raster-thumbnail may not fire on preview — opening the original always does |
@@ -44,12 +44,12 @@ cookie jar.
 
 | Format | Saved as | Fires when |
 |---|---|---|
-| `cookies` | `cookies.txt` | A stolen jar is replayed. The bait cookie is path-scoped to the canary, so curl / wget / yt-dlp or any "export cookies" tool that reloads it hits the URL exactly. |
-| `bookmarks` | `bookmarks.html` | The file is opened in a browser (the bait's `ICON_URI` is fetched on render) **or** the bait bookmark — an internal VPN portal / admin console — is clicked. |
-| `env` | `.env` | A tool reads the file and resolves `API_BASE_URL` against the canary. (`DEPLOY_WEBHOOK_URL` points at `/hooks/deploy` on the same host, which has no route — it is plausible filler, not a second trigger.) |
-| `aws-credentials` | `credentials` | The AWS CLI or an SDK is pointed at the profile — it honours the profile's `endpoint_url`, so calls resolve against the canary rather than AWS. |
-| `netrc` | `.netrc` | curl, wget, git or ftp authenticate to the canary host. `.netrc` is auto-consumed, so this fires without the file ever being opened. |
-| `kubeconfig` | `config` | Someone reads the file and curls the `server:` URL to see what cluster it is. (kubectl appends its own API paths and 404s, so a real `kubectl get pods` won't register — this catches the read.) |
+| `cookies` | `cookies.txt` | Someone requests the bait cookie's URL. Loading the jar issues no request by itself; the bait entry is scoped to the canary's host and exact path, which is where someone trying the stolen session will send it. |
+| `bookmarks` | `bookmarks.html` | The bait bookmark — an internal VPN portal / admin console — is clicked. Viewing the file fetches nothing; a browser may also request the bookmark's icon URL when the file is imported. |
+| `env` | `.env` | A tool reads the file and calls `API_BASE_URL` — including an app that joins its own API path onto it, since any path under a trigger URL fires. `DEPLOY_WEBHOOK_URL` sits under the trigger URL too. |
+| `aws-credentials` | `credentials` | The AWS CLI or an SDK is pointed at the profile — it honours the profile's `endpoint_url`, so calls resolve against the canary rather than AWS, whatever bucket, object or operation path they append. |
+| `netrc` | `.netrc` | Someone requests the restore URL in the file's header comment. It does not fire on its own: `.netrc` entries match on host only, so a tool that reads the file sends the bait login to the canary host but not to this key's path. |
+| `kubeconfig` | `config` | Any request under the `server:` URL: someone who curls it to see what cluster it is, or kubectl itself, which appends its own API paths (and then fails on the non-Kubernetes reply). |
 | `ovpn` | `<memo>.ovpn` | Someone follows the profile-update URL in the file. OpenVPN speaks its own protocol, so pointing the client at an HTTP canary won't fire — this is discovery bait, a weaker trigger than a document beacon, and the dashboard preset says so. |
 | `rdp` | `<memo>.rdp` | Someone follows the `workspacefeedurl` in the file. Like `.ovpn`, RDP won't beacon on its own; the hit comes when a human opens the URL. |
 

@@ -6,7 +6,7 @@ sidebarTitle: "CLI backup"
 
 The CLI's `config.json` is plain JSON and trivially copyable, but the secrets that actually make it work — `mantis_live_…` API keys, Cloudflare Service-Auth credentials, and edge-worker AES keys — live in the OS keychain and can't be `scp`'d. `mantis backup` and `mantis restore` cover the full set: every profile's config + secrets plus your installed-plugin manifest, packed into a single passphrase-encrypted JSON file.
 
-The resulting file is safe to commit to a private git-crypt repo, attach to a 1Password / Bitwarden / Doppler vault entry, or stash in iCloud / Drive. Lose the passphrase and the contents are unrecoverable, by design.
+Keep the resulting file private: attach it to a 1Password / Bitwarden / Doppler vault entry, or stash it in encrypted storage. It is encrypted, but it holds full API keys, and anyone with a copy can try passphrases offline — so use a strong passphrase and don't commit it to a repository other people can read. `mantis backup` warns when the output path is inside a git work tree. Lose the passphrase and the contents are unrecoverable, by design.
 
 ## Migrating to a new machine
 
@@ -80,7 +80,7 @@ The file is written with mode `0600` (owner-only).
 | Flag | What it does |
 |---|---|
 | `<file>` | Required. Path to the bundle produced by `mantis backup`. |
-| `--overwrite` | Replace profiles + keychain entries when names collide with profiles already on the target machine. Default: skip existing, print which were skipped. |
+| `--overwrite` | Replace profiles + keychain entries when names collide with profiles already on the target machine, or when a bundle profile points at a server that already has a different stored credential. Default: skip those, print which were skipped. |
 | `--skip-plugins` | Don't re-install plugins from the manifest. You can run `mantis plugin add` manually later. |
 | `--passphrase-stdin` | Read the passphrase from stdin. |
 | `--passphrase-env <VAR>` | Read the passphrase from the named environment variable. |
