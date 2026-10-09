@@ -5,6 +5,7 @@
 #   serve.js, Start Docs.*  Mintlify's double-click-to-serve helpers
 #   justfile, scripts/      copied out of this repo by the exporter
 #   LICENSE, README.md      repo files, not site content
+#   wrangler.jsonc          the Worker config, copied out by the exporter too
 #
 # This file is committed at the repo root and copied into dist/ by
 # `just export`, because dist/ is regenerated on every build.
@@ -16,3 +17,17 @@ scripts
 LICENSE
 README.md
 .assetsignore
+
+# The deploy config must never be public: the exporter copies it into dist/.
+wrangler.jsonc
+wrangler.toml
+.wrangler/
+
+# Estate baseline (2026-10), kept in step across every site repo.
+.git/
+.DS_Store
+.env*
+wrangler.json*
+node_modules/
+.github/
+.gh-workflows/
