@@ -1,0 +1,29 @@
+# mantis documentation — Security disclosure policy
+# RFC 9116 — https://www.rfc-editor.org/rfc/rfc9116
+# Last updated: 2026-10-09
+
+# Preferred channel: GitHub Private Vulnerability Reporting on the product repo
+Contact: https://github.com/privacykey/mantis/security/advisories/new
+
+# Encrypted email fallback. Plaintext security reports are NOT accepted —
+# the OpenPGP key is published via the Encryption field below.
+Contact: mailto:security@privacykey.org
+
+# OpenPGP key for encrypted reports: the armored key, and its fingerprint.
+Encryption: https://github.com/AdamXweb.gpg
+Encryption: openpgp4fpr:54BFCE808324E569FB1919B304AAA3CBD117D9B2
+
+# Full disclosure policy, scope, safe-harbor terms, and what to include
+# in a report. mantis has no per-product policy, so the privacykey
+# organisation policy applies — please read it before submitting.
+Policy: https://github.com/privacykey/.github/blob/main/SECURITY.md
+
+# Canonical location for this file
+Canonical: https://docs.mantis.privacykey.org/.well-known/security.txt
+
+# Languages we can respond in
+Preferred-Languages: en
+
+# Refresh before this date. RFC 9116 requires Expires; clients (and
+# bug-bounty platforms) reject expired files.
+Expires: 2027-10-01T00:00:00Z

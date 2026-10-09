@@ -5,7 +5,7 @@
   "repository": "https://github.com/privacykey/docs-mantis",
   "scripts": {
     "dev": "npx --yes mint@latest dev",
-    "build": "rm -rf dist export.zip && npx --yes mint@latest export && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore && node scripts/build-llms.mjs --dist dist",
+    "build": "rm -rf dist export.zip && npx --yes mint@latest export && mkdir -p dist && (unzip -q -o export.zip -d dist || python3 -m zipfile -e export.zip dist) && cp .assetsignore dist/.assetsignore && cp _headers dist/_headers && mkdir -p dist/.well-known && cp -R .well-known/. dist/.well-known/ && node scripts/build-llms.mjs --dist dist",
     "check": "node scripts/check-docs.mjs && node scripts/build-llms.mjs --check",
     "llms": "node scripts/build-llms.mjs",
     "validate": "npx --yes mint@latest validate",
