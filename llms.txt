@@ -28,7 +28,7 @@ This file indexes the mantis documentation site at https://docs.mantis.privacyke
 
 - [HTTP API](https://docs.mantis.privacykey.org/api.md): Reference for key management endpoints, trigger responses, and webhook payloads.
 - [Configuration](https://docs.mantis.privacykey.org/configuration.md): Required and optional environment variables for running Mantis.
-- [CLI reference](https://docs.mantis.privacykey.org/cli.md): Every mantis CLI command and flag, verified against the v0.2.0 source.
+- [CLI reference](https://docs.mantis.privacykey.org/cli.md): Mantis CLI commands, options, and terminal output.
 - [CLI backup & restore](https://docs.mantis.privacykey.org/cli-backup.md): Export all your CLI profiles and plugin manifest into a passphrase-encrypted file, then restore on another machine.
 - [Updating](https://docs.mantis.privacykey.org/updating.md): Update commands for the server, CLI, edge worker, IoT helper, and host installers.
 - [Changelog](https://docs.mantis.privacykey.org/changelog.md): Published Mantis releases — CLI and server — what changed and where the full notes live.

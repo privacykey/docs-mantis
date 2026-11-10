@@ -48,11 +48,11 @@ The CLI is the recommended way to drive mantis — the dashboard is a nice brows
 brew install privacykey/tap/mantis
 ```
 
-That gives you `mantis` on `$PATH` with shell completions, a man page, and the auto-update path from the Homebrew tap. (Building from source also works — see [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli#install-from-this-repo) for `npm link` instructions.)
+Homebrew puts `mantis` on `$PATH` with shell completions and a man page. Use `brew upgrade mantis` to update, or [build the CLI from source](https://github.com/privacykey/mantis/blob/main/cli/README.md#install-from-this-repo).
 
 ## 2. Pick where mantis lives
 
-The CLI talks to either of two backends, with the same command surface:
+The CLI uses `mantis new` for a server and `mantis edge mint` for a Cloudflare Worker.
 
 | Backend | What it gives you | Where it runs |
 |---|---|---|
@@ -115,7 +115,7 @@ mantis new
 
 ```bash
 mantis new "ssh on prod" \
-  --notify-webhook https://discord.com/api/webhooks/... \
+  --notify discord:https://discord.com/api/webhooks/... \
   --install shell --ssh-only \
   --out ~/.zshrc.d/mantis.sh
 ```
@@ -145,8 +145,8 @@ mantis bulk-create \
   --memo-template "{{area}} - {{device}}"
 ```
 
-The output CSV is your input with `mantis_id`, `mantis_url`, and four more
-columns appended. The input can also carry per-row `notify`, `response_kind`,
+The output CSV keeps your input columns and appends the memo, key ID, public
+ID, trigger URL, creation time, and any row error. The input can also carry per-row `notify`, `response_kind`,
 `response_payload`, and `expires_at` columns so a row can vary from the rest —
 `response_kind`, `response_payload`, and `expires_at` override the matching flag,
 while a row's `notify` destinations are added on top of the `--notify` flags — see
@@ -162,8 +162,11 @@ The web dashboard at `/keys` is handy for clicking through a key's hits and seei
 |---|---|
 | `/keys` | `mantis list` |
 | `/keys/<id>` | `mantis show <id>` or `mantis hits <id> --follow` |
-| `/keys/new` | `mantis new` |
-| `/inbox` (dev only) | `mantis hits last --follow` against a key pointing at `/inbox/demo` |
+| **new** (`/keys/new`) | `mantis new` |
+| **bulk** (`/keys/bulk`) | `mantis bulk-create` writes a CSV; the dashboard downloads a ZIP |
+| **machine** (`/keys/device`) | `mantis device new` |
+
+The optional [dev inbox](https://docs.mantis.privacykey.org/dev-inbox) shows captured webhook payloads.
 
 The dashboard authenticates by exchanging your API key for an httpOnly
 `mantis_session` cookie. The cookie contains an opaque session token; the
@@ -182,7 +185,7 @@ Two flavours of "running mantis on your laptop": the **Docker quickstart** is fo
 Run the stack against your laptop with Docker:
 
 ```bash
-git clone <this repo> mantis && cd mantis
+git clone https://github.com/privacykey/mantis && cd mantis
 ./scripts/setup.sh   # creates .env with a random DB password + API-key pepper
 docker compose up -d
 docker compose logs mantis | grep "bootstrap API key" -A1
@@ -198,14 +201,13 @@ The first boot prints a bootstrap API key. Copy it; it won't be shown again.
 Then drive the CLI as usual, just pointing at localhost:
 
 ```bash
-mantis --key mantis_live_... login --url http://localhost:3000
-
-# The dev image ships an inbox at /inbox; webhook captures land there with
-# zero external setup.
-mantis new "first mantis" -w http://localhost:3000/inbox/demo
-open http://localhost:3000/inbox
-mantis hits last --follow
+mantis login --url http://localhost:3000   # paste the admin key when prompted
+key_id="$(mantis new "first mantis" --id-only)"
+curl -fsS -o /dev/null "$(mantis show "$key_id" --url-only)"
+mantis hits "$key_id"
 ```
+
+This records a test hit on your local server. To inspect webhook payloads during development, see the [dev inbox](https://docs.mantis.privacykey.org/dev-inbox).
 
 When you're ready to move from "trying it" to "running it", pick a real deployment from [Deployment](https://docs.mantis.privacykey.org/deployment) and `mantis --profile prod login --url https://...` against it. The Docker localhost setup is for evaluation only — don't rely on it for canaries that need to fire when you're not at your machine.
 
@@ -1508,7 +1510,7 @@ The CLI is the recommended interface, but everything it does is exposed over a p
 
 ```bash
 export MANTIS=http://localhost:3000
-export KEY=mantis_live_...   # `mantis login` output, or read from the bootstrap log
+export KEY=mantis_live_...   # use your API key or read the bootstrap admin key from the server log
 
 # Mint a key
 curl -sX POST $MANTIS/api/keys \
@@ -1524,6 +1526,9 @@ curl -i $MANTIS/c/<public_id>
 # Inspect hits
 curl -s $MANTIS/api/keys/<id>/hits -H "Authorization: Bearer $KEY" | jq
 ```
+
+On server builds from `main`, a temporary authentication dependency failure
+returns HTTP `503` with `Retry-After: 1`. Wait and retry with the same credentials.
 
 ## Endpoint reference
 
@@ -1852,21 +1857,38 @@ Optional:
 # CLI reference
 Source: https://docs.mantis.privacykey.org/cli
 
-Every mantis CLI command and flag, verified against the v0.2.0 source.
+Mantis CLI commands, options, and terminal output.
 
-The `mantis` CLI is the primary way to work with a Mantis server (and with the
-stateless [edge worker](https://docs.mantis.privacykey.org/edge-deployment)). This page documents **every** command
-and flag in the CLI, transcribed from the v0.2.0 source. For the conceptual
-map — diagrams, mental model, common workflows — see `cli/COMMAND_MAP.md` in the
-app repo.
+The `mantis` CLI works with a Mantis server and the stateless
+[edge worker](https://docs.mantis.privacykey.org/edge-deployment). The
+[command map](https://github.com/privacykey/mantis/blob/main/cli/COMMAND_MAP.md)
+shows how the commands fit together.
 
 New to the CLI? Run `mantis init` for guided, interactive setup, or `mantis`
 with no arguments for a context-aware welcome screen.
 
 > **Note**
 >
-> This reference covers CLI **v0.2.0**. Check yours with `mantis --version`, and
-> run `mantis doctor` after upgrading the server to confirm compatibility.
+> This reference covers the published CLI **v0.3.0**. The
+> [terminal output redesign](https://github.com/privacykey/mantis/pull/112) is
+> available when you build from `main`. Check your version with
+> `mantis --version` and run `mantis doctor` after upgrading the server.
+
+## Terminal output on main
+
+`mantis --help` groups commands by task. The welcome screen shows next steps
+for the server and edge setups it finds. Diagnostics in `mantis doctor`
+distinguish failed checks from skipped checks and show recovery commands where
+available.
+
+`mantis status` puts tripped monitors first. In this example, **Finance share**
+tripped four minutes ago. Run `mantis status ec7a10f3` to see what tripped it.
+
+![Output from mantis status with sample data. One of three monitored keys is tripped, and one unmonitored key is omitted.](https://docs.mantis.privacykey.org/images/cli-status.png)
+
+For scripts, choose `--json` or the command's `--id-only` or `--url-only` flag
+where available. Use `--color never` and `MANTIS_ASCII=1` when your terminal
+needs plain text and ASCII symbols.
 
 ## Global flags
 
@@ -2951,9 +2973,14 @@ mantis download <key-id> --env ./.env
 mantis download <key-id> --netrc ./.netrc
 mantis download <key-id> --aws-credentials ./credentials
 
-# Dashboard: key detail page → "file keys" card has download links for all formats
+# Dashboard: open a key to download its artifact
 # API: GET /api/keys/<id>/download?format=docx|xlsx|pptx|pdf|folder|nfc-label|apple-wallet|svg|html|md|eml|ics|vcf|rtf|cookies|bookmarks|env|aws-credentials|netrc|kubeconfig|ovpn|rdp  (Bearer or session)
 ```
+
+In the dashboard, use **new** to choose the file type first, or **bulk** to
+create separate keys and download their artifacts in one ZIP. For documents and credential
+bait, the first download marks that format on the key's detail page. Give each
+format its own key so you can identify the artifact from its hit history.
 
 **Office reader caveats**:
 - ✅ Microsoft Office desktop apps — fetch external image on render (subject to **Protected View** for files marked "from internet"; first "Enable Editing" click triggers).
@@ -3187,6 +3214,14 @@ move to an unguessable id.
 
 For devices that do not expose useful webhooks, [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) can watch LAN neighbor tables and log files, then fire the same Mantis URL for unexpected online/login events.
 
+On `main`, regenerated Scrypted scripts report rejected HTTP
+responses and delivery timeouts in the Scrypted script console. Reinstall the
+generated script to pick up this behavior.
+
+For Home Assistant OS or Supervised, use the
+[local add-on packaging guide](https://github.com/privacykey/mantis/blob/main/iot-helper/homeassistant-addon/README.md)
+to package the helper and copy the complete add-on folder into Home Assistant.
+
 ## What information each installer captures
 
 Each installer sends `X-Mantis-*` headers alongside the hit, which the server parses into a structured `host_context` object exposed on the API + dashboard + CLI.
@@ -3276,6 +3311,14 @@ mantis reset <key-id>   # in latch mode; window mode auto-resets
 Every "nothing to read here" case gets the same empty 404, so the endpoint neither confirms that a key exists nor keeps Uptime Kuma alerting on a key you've shut down. All responses include `Cache-Control: no-store`. The status endpoint **does not record a hit** — Uptime Kuma can poll it forever without filling your hits log.
 
 When and how a key tripped (`tripped_at`, mode, window) is not on the public URL. Read it with `mantis status <key-id>` or the owner-only `GET /api/keys/<id>/monitor`.
+
+## Dashboard recovery on main
+
+If a deployment interrupts a dashboard action, choose **Reload this page** and
+check the saved state before trying the action again. The monitor card restores
+unsaved mode and window settings in the same tab when browser session storage
+is available. Review the restored values before saving, or choose **discard
+draft** to use the server's settings.
 
 ## Notes
 

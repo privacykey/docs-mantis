@@ -4,7 +4,7 @@ The Mintlify documentation source for [`privacykey/mantis`](https://github.com/p
 
 Production is a Cloudflare Worker serving the static export as assets
 ([`wrangler.jsonc`](wrangler.jsonc)). `just deploy` builds and publishes it.
-**Hostname:** `docs.mantis.privacykey.org` *(DNS not configured yet)*
+**Hostname** [docs.mantis.privacykey.org](https://docs.mantis.privacykey.org/)
 
 [![Project status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fprivacykey%2F.github%2Fmain%2Fbadges%2Fdocs-mantis.json)](https://github.com/privacykey/.github/blob/main/STATUS.md#docs-mantis)
 
@@ -17,9 +17,7 @@ Production is a Cloudflare Worker serving the static export as assets
 
 ## Read the docs
 
-The published site is not live yet — no docs domain resolves for this project at the moment, so there is nothing to link here. Until it is published, read the pages in this repository directly: they are ordinary Markdown with Mintlify frontmatter, and GitHub renders them.
-
-Start at [`index.mdx`](./index.mdx), or jump to [Getting started](./getting-started.md).
+Read the [published documentation](https://docs.mantis.privacykey.org/) or start with the [Getting started source](./getting-started.md).
 
 ## Run it locally
 

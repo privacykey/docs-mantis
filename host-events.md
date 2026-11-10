@@ -161,6 +161,14 @@ move to an unguessable id.
 
 For devices that do not expose useful webhooks, [`iot-helper/`](https://github.com/privacykey/mantis/tree/main/iot-helper) can watch LAN neighbor tables and log files, then fire the same Mantis URL for unexpected online/login events.
 
+On `main`, regenerated Scrypted scripts report rejected HTTP
+responses and delivery timeouts in the Scrypted script console. Reinstall the
+generated script to pick up this behavior.
+
+For Home Assistant OS or Supervised, use the
+[local add-on packaging guide](https://github.com/privacykey/mantis/blob/main/iot-helper/homeassistant-addon/README.md)
+to package the helper and copy the complete add-on folder into Home Assistant.
+
 ## What information each installer captures
 
 Each installer sends `X-Mantis-*` headers alongside the hit, which the server parses into a structured `host_context` object exposed on the API + dashboard + CLI.

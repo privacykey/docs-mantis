@@ -8,7 +8,7 @@ The CLI is the recommended interface, but everything it does is exposed over a p
 
 ```bash
 export MANTIS=http://localhost:3000
-export KEY=mantis_live_...   # `mantis login` output, or read from the bootstrap log
+export KEY=mantis_live_...   # use your API key or read the bootstrap admin key from the server log
 
 # Mint a key
 curl -sX POST $MANTIS/api/keys \
@@ -24,6 +24,9 @@ curl -i $MANTIS/c/<public_id>
 # Inspect hits
 curl -s $MANTIS/api/keys/<id>/hits -H "Authorization: Bearer $KEY" | jq
 ```
+
+On server builds from `main`, a temporary authentication dependency failure
+returns HTTP `503` with `Retry-After: 1`. Wait and retry with the same credentials.
 
 ## Endpoint reference
 
