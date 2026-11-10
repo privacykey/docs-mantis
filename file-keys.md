@@ -83,9 +83,14 @@ mantis download <key-id> --env ./.env
 mantis download <key-id> --netrc ./.netrc
 mantis download <key-id> --aws-credentials ./credentials
 
-# Dashboard: key detail page → "file keys" card has download links for all formats
+# Dashboard: open a key to download its artifact
 # API: GET /api/keys/<id>/download?format=docx|xlsx|pptx|pdf|folder|nfc-label|apple-wallet|svg|html|md|eml|ics|vcf|rtf|cookies|bookmarks|env|aws-credentials|netrc|kubeconfig|ovpn|rdp  (Bearer or session)
 ```
+
+In the dashboard, use **new** to choose the file type first, or **bulk** to
+create separate keys and download their artifacts in one ZIP. For documents and credential
+bait, the first download marks that format on the key's detail page. Give each
+format its own key so you can identify the artifact from its hit history.
 
 **Office reader caveats**:
 - ✅ Microsoft Office desktop apps — fetch external image on render (subject to **Protected View** for files marked "from internet"; first "Enable Editing" click triggers).

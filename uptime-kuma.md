@@ -55,6 +55,14 @@ Every "nothing to read here" case gets the same empty 404, so the endpoint neith
 
 When and how a key tripped (`tripped_at`, mode, window) is not on the public URL. Read it with `mantis status <key-id>` or the owner-only `GET /api/keys/<id>/monitor`.
 
+## Dashboard recovery on main
+
+If a deployment interrupts a dashboard action, choose **Reload this page** and
+check the saved state before trying the action again. The monitor card restores
+unsaved mode and window settings in the same tab when browser session storage
+is available. Review the restored values before saving, or choose **discard
+draft** to use the server's settings.
+
 ## Notes
 
 - Same key still records hits and dispatches configured notification destinations on `/c/<public_id>` — the status URL is a separate read-only reflection of state.

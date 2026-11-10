@@ -11,11 +11,11 @@ The CLI is the recommended way to drive mantis — the dashboard is a nice brows
 brew install privacykey/tap/mantis
 ```
 
-That gives you `mantis` on `$PATH` with shell completions, a man page, and the auto-update path from the Homebrew tap. (Building from source also works — see [`cli/README.md`](https://github.com/privacykey/mantis/tree/main/cli#install-from-this-repo) for `npm link` instructions.)
+Homebrew puts `mantis` on `$PATH` with shell completions and a man page. Use `brew upgrade mantis` to update, or [build the CLI from source](https://github.com/privacykey/mantis/blob/main/cli/README.md#install-from-this-repo).
 
 ## 2. Pick where mantis lives
 
-The CLI talks to either of two backends, with the same command surface:
+The CLI uses `mantis new` for a server and `mantis edge mint` for a Cloudflare Worker.
 
 | Backend | What it gives you | Where it runs |
 |---|---|---|
@@ -78,7 +78,7 @@ mantis new
 
 ```bash
 mantis new "ssh on prod" \
-  --notify-webhook https://discord.com/api/webhooks/... \
+  --notify discord:https://discord.com/api/webhooks/... \
   --install shell --ssh-only \
   --out ~/.zshrc.d/mantis.sh
 ```
@@ -108,8 +108,8 @@ mantis bulk-create \
   --memo-template "{{area}} - {{device}}"
 ```
 
-The output CSV is your input with `mantis_id`, `mantis_url`, and four more
-columns appended. The input can also carry per-row `notify`, `response_kind`,
+The output CSV keeps your input columns and appends the memo, key ID, public
+ID, trigger URL, creation time, and any row error. The input can also carry per-row `notify`, `response_kind`,
 `response_payload`, and `expires_at` columns so a row can vary from the rest —
 `response_kind`, `response_payload`, and `expires_at` override the matching flag,
 while a row's `notify` destinations are added on top of the `--notify` flags — see
@@ -125,8 +125,11 @@ The web dashboard at `/keys` is handy for clicking through a key's hits and seei
 |---|---|
 | `/keys` | `mantis list` |
 | `/keys/<id>` | `mantis show <id>` or `mantis hits <id> --follow` |
-| `/keys/new` | `mantis new` |
-| `/inbox` (dev only) | `mantis hits last --follow` against a key pointing at `/inbox/demo` |
+| **new** (`/keys/new`) | `mantis new` |
+| **bulk** (`/keys/bulk`) | `mantis bulk-create` writes a CSV; the dashboard downloads a ZIP |
+| **machine** (`/keys/device`) | `mantis device new` |
+
+The optional [dev inbox](/dev-inbox) shows captured webhook payloads.
 
 The dashboard authenticates by exchanging your API key for an httpOnly
 `mantis_session` cookie. The cookie contains an opaque session token; the

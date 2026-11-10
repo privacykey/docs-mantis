@@ -1,22 +1,39 @@
 ---
 title: "CLI reference"
-description: "Every mantis CLI command and flag, verified against the v0.2.0 source."
+description: "Mantis CLI commands, options, and terminal output."
 sidebarTitle: "CLI"
 ---
 
-The `mantis` CLI is the primary way to work with a Mantis server (and with the
-stateless [edge worker](/edge-deployment)). This page documents **every** command
-and flag in the CLI, transcribed from the v0.2.0 source. For the conceptual
-map — diagrams, mental model, common workflows — see `cli/COMMAND_MAP.md` in the
-app repo.
+The `mantis` CLI works with a Mantis server and the stateless
+[edge worker](/edge-deployment). The
+[command map](https://github.com/privacykey/mantis/blob/main/cli/COMMAND_MAP.md)
+shows how the commands fit together.
 
 New to the CLI? Run `mantis init` for guided, interactive setup, or `mantis`
 with no arguments for a context-aware welcome screen.
 
 <Note>
-This reference covers CLI **v0.2.0**. Check yours with `mantis --version`, and
-run `mantis doctor` after upgrading the server to confirm compatibility.
+This reference covers the published CLI **v0.3.0**. The
+[terminal output redesign](https://github.com/privacykey/mantis/pull/112) is
+available when you build from `main`. Check your version with
+`mantis --version` and run `mantis doctor` after upgrading the server.
 </Note>
+
+## Terminal output on main
+
+`mantis --help` groups commands by task. The welcome screen shows next steps
+for the server and edge setups it finds. Diagnostics in `mantis doctor`
+distinguish failed checks from skipped checks and show recovery commands where
+available.
+
+`mantis status` puts tripped monitors first. In this example, **Finance share**
+tripped four minutes ago. Run `mantis status ec7a10f3` to see what tripped it.
+
+![Output from mantis status with sample data. One of three monitored keys is tripped, and one unmonitored key is omitted.](/images/cli-status.png)
+
+For scripts, choose `--json` or the command's `--id-only` or `--url-only` flag
+where available. Use `--color never` and `MANTIS_ASCII=1` when your terminal
+needs plain text and ASCII symbols.
 
 ## Global flags
 
